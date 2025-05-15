@@ -1,0 +1,6 @@
+log: false
+project_name: "gridworld-memory-agent"
+log_update_rate: 50
+episodes: 150
+steps: 100
+
