@@ -3,5 +3,5 @@
 
 # Запуск
 Для запуска скопируйте репозиторий командой 
-```git clone https://github.com/nbainaev/tPCN-project```
+```git clone https://github.com/nbainaev/tPCN-project```\
 Далее запустите файл test.py
