@@ -195,6 +195,7 @@ class tPCN(nn.Module):
         if direction is not None:
             self.direction_memory.append(direction)
 
+
 class tPCAgent:
     def __init__(self, 
                  hidden_size=64, 

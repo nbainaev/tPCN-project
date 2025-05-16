@@ -17,53 +17,6 @@ import torch
 
 os.environ['WANDB_ENTITY'] = 'nik-baynaev-national-research-nuclear-university-mephi'
 
-def plot_observation_counts(true_observations, pred_observations):
-    # Подсчитываем количество каждого цвета в true_observations и pred_observations
-    true_counts = Counter(true_observations)
-    pred_counts = Counter(pred_observations)
-    
-    # Получаем все уникальные цвета из обоих списков
-    all_observations = sorted(set(true_observations).union(set(pred_observations)))
-    
-    # Подготавливаем данные для диаграммы
-    true_values = [true_counts.get(observation, 0) for observation in all_observations]
-    pred_values = [pred_counts.get(observation, 0) for observation in all_observations]
-    
-    # Настраиваем позиции столбцов
-    x = range(len(all_observations))
-    width = 0.35  # Ширина столбцов
-    
-    # Создаем фигуру и оси
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Рисуем столбцы для истинных и предсказанных цветов
-    true_bars = ax.bar([i - width/2 for i in x], true_values, width, label='True observations', observation='green')
-    pred_bars = ax.bar([i + width/2 for i in x], pred_values, width, label='Predicted observations', observation='blue')
-    
-    # Добавляем подписи
-    ax.set_xlabel('observations')
-    ax.set_ylabel('Count')
-    ax.set_xticks(x)
-    ax.set_xticklabels(all_observations)
-    ax.legend()
-    
-    # Добавляем подписи значений на столбцах
-    def add_labels(bars):
-        for bar in bars:
-            height = bar.get_height()
-            ax.annotate(f'{height}',
-                        xy=(bar.get_x() + bar.get_width() / 2, height),
-                        xytext=(0, 3),  # 3 points vertical offset
-                        textcoords="offset points",
-                        ha='center', va='bottom')
-    
-    add_labels(true_bars)
-    add_labels(pred_bars)
-    
-    # Автоматическая настройка макета, чтобы все подписи поместились
-    fig.tight_layout()
-    return fig
-
 def read_config(filepath):
     if not isinstance(filepath, Path):
         filepath = Path(filepath)
@@ -159,21 +112,5 @@ if __name__ == '__main__':
                     "loss state": losses_g[-1]
                 }
             )
-            if (log_update_rate is not None) and (episode % log_update_rate == 0):
-                
-                fig = plot_observation_counts(true_observations, pred_observations)
-                logger.log(
-                    {'observation_predictions': wandb.Image(fig)}, step=episode+1
-                )
-                plt.close(fig)
     
-    fig, ax = plt.subplots(2, 2, figsize=(10, 5))
-    ax[0, 0].plot(range(episodes), accuracy)
-    ax[0, 1].plot(range(episodes), losses)
-    ax[1, 0].plot(range(episodes), losses_p)
-    ax[1, 1].plot(range(episodes), losses_g)
-    ax[0, 0].legend(["Accuracy"])
-    ax[0, 1].legend(["Overall loss"])
-    ax[1, 0].legend(["Loss prediction"])
-    ax[1, 1].legend(["Loss state"])
-    plt.show()
+
