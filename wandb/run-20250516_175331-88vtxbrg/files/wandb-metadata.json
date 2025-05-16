@@ -1,0 +1,31 @@
+{
+  "os": "Windows-11-10.0.26100-SP0",
+  "python": "CPython 3.13.3",
+  "startedAt": "2025-05-16T14:53:31.542079Z",
+  "program": "C:\\Users\\nikba\\.vscode\\Projects\\MIPT Task 1 (tPC)\\gridworld\\test.py",
+  "codePath": "test.py",
+  "git": {
+    "remote": "https://github.com/nbainaev/tPCN-project.git",
+    "commit": "b2249b1c361515a33e7b9ac90fd9c4aa307d319d"
+  },
+  "email": "nik.baynaev@yandex.ru",
+  "root": "C:\\Users\\nikba\\.vscode\\Projects\\MIPT Task 1 (tPC)\\gridworld",
+  "host": "diskworld",
+  "executable": "C:\\Users\\nikba\\.vscode\\Projects\\MIPT Task 1 (tPC)\\.venv\\Scripts\\python.exe",
+  "codePathLocal": "test.py",
+  "cpu_count": 6,
+  "cpu_count_logical": 12,
+  "disk": {
+    "/": {
+      "total": "510638682112",
+      "used": "208936419328"
+    }
+  },
+  "memory": {
+    "total": "16469520384"
+  },
+  "cpu": {
+    "count": 6,
+    "countLogical": 12
+  }
+}

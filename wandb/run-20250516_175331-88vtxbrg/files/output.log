@@ -1,0 +1,26 @@
+Processing episode::   0%|                                                                                               | 0/300 [00:01<?, ?it/s]
+Traceback (most recent call last):
+  File "C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\gridworld\test.py", line 164, in <module>
+    fig = plot_observation_counts(true_observations, pred_observations)
+  File "C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\gridworld\test.py", line 40, in plot_observation_counts
+    true_bars = ax.bar([i - width/2 for i in x], true_values, width, label='True observations', observation='green')
+  File "C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\.venv\Lib\site-packages\matplotlib\__init__.py", line 1521, in inner
+    return func(
+        ax,
+        *map(cbook.sanitize_sequence, args),
+        **{k: cbook.sanitize_sequence(v) for k, v in kwargs.items()})
+  File "C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\.venv\Lib\site-packages\matplotlib\axes\_axes.py", line 2654, in bar
+    r._internal_update(kwargs)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\.venv\Lib\site-packages\matplotlib\artist.py", line 1233, in _internal_update
+    return self._update_props(
+           ~~~~~~~~~~~~~~~~~~^
+        kwargs, "{cls.__name__}.set() got an unexpected keyword argument "
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "{prop_name!r}")
+        ^^^^^^^^^^^^^^^^
+  File "C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\.venv\Lib\site-packages\matplotlib\artist.py", line 1206, in _update_props
+    raise AttributeError(
+        errfmt.format(cls=type(self), prop_name=k),
+        name=k)
+AttributeError: Rectangle.set() got an unexpected keyword argument 'observation'

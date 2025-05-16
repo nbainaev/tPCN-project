@@ -1,8 +1,8 @@
 max_iter: 20
-lr_iter: 0.001
-lr_Win: 0.001
-lr_Wr: 0.001
-lr_Wout: 0.01
+lr_iter: 1e-4
+lr_Win: 5e-3
+lr_Wr: 5e-3
+lr_Wout: 2e-2
 hidden_size: 32
 memory_size: 10
 tol: 0.001

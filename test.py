@@ -13,6 +13,7 @@ from agent import tPCAgent
 import matplotlib.pyplot as plt
 from collections import Counter
 from tqdm import tqdm
+import torch
 
 os.environ['WANDB_ENTITY'] = 'nik-baynaev-national-research-nuclear-university-mephi'
 
@@ -110,7 +111,7 @@ if __name__ == '__main__':
     losses_g = []
     accuracy = []
     # run several episodes
-    for episode in tqdm(range(episodes), desc="Processing episode:"):
+    for episode in tqdm(range(episodes), desc="Processing"):
         env.reset(*ini_pos)
         agent.reset()
         actions = []
@@ -122,17 +123,22 @@ if __name__ == '__main__':
                 # choose any random action
                 action = agent.act(len(env.actions))
                 actions.append(action)
-                observation = agent.predict_observation(action)
+                observation, observation_proba = agent.predict_observation(action)
                 pred_observations.append(observation)
                 env.act(action)
             env.step()
             obs, reward, is_terminal = env.obs()
-            true_observations.append(obs[0, 0])
+            obs = obs[0, 0]
+            true_observations.append(obs)
             if step > 0:
-                agent.process_step(obs[0, 0], action)
-                #print(observation, obs[0, 0])
+                # if obs < 0:
+                #     obs = prev_obs
+                agent.process_step(obs, action)
+                # print(agent.tpcn.obs_encode_dict)
+                # print(observation_proba.T, observation, obs[0, 0])
             elif step == 0:
-                agent.tpcn.update_memory(obs=obs[0, 0])
+                prev_obs = obs
+                agent.tpcn.update_memory(obs=obs)
             
             # finish episode early if terminal state is entered
             if is_terminal:
@@ -148,6 +154,9 @@ if __name__ == '__main__':
             logger.log(
                 {
                     "Accuracy": accuracy[-1],
+                    "Overall Loss": losses[-1],
+                    "Loss prediction": losses_p[-1],
+                    "loss state": losses_g[-1]
                 }
             )
             if (log_update_rate is not None) and (episode % log_update_rate == 0):
@@ -157,13 +166,14 @@ if __name__ == '__main__':
                     {'observation_predictions': wandb.Image(fig)}, step=episode+1
                 )
                 plt.close(fig)
+    
     fig, ax = plt.subplots(2, 2, figsize=(10, 5))
     ax[0, 0].plot(range(episodes), accuracy)
     ax[0, 1].plot(range(episodes), losses)
     ax[1, 0].plot(range(episodes), losses_p)
     ax[1, 1].plot(range(episodes), losses_g)
     ax[0, 0].legend(["Accuracy"])
-    ax[0, 1].legend(["Loss"])
-    ax[1, 0].legend(["Loss p"])
-    ax[1, 1].legend(["Loss g"])
+    ax[0, 1].legend(["Overall loss"])
+    ax[1, 0].legend(["Loss prediction"])
+    ax[1, 1].legend(["Loss state"])
     plt.show()

@@ -27,10 +27,6 @@ class CombinedLoss(nn.MSELoss):
         super(CombinedLoss, self).__init__()
     
     def forward(self, input_p: Tensor, target_p: Tensor, input_g: Tensor, target_g: Tensor) -> Tensor:
-        # assert not torch.isnan(input_p).any(), "input_p contains NaN!"
-        # assert not torch.isinf(input_p).any(), "input_p contains inf!"
-        # assert not torch.isnan(target_p).any(), "target_p contains NaN!"
-        # assert not torch.isinf(target_p).any(), "target_p contains inf!"
         eps = 1e-8
         loss_p = F.mse_loss(input_p, target_p, reduction=self.reduction)
         loss_g = F.mse_loss(input_g, target_g, reduction=self.reduction)
@@ -59,12 +55,6 @@ class tPCN(nn.Module):
         self.lr_Win = lr_Win
         self.lr_Wr = lr_Wr
         self.lr_Wout = lr_Wout
-        # self.direction_encoder = nn.Linear(1, n_dir, bias=False)
-        # self.obs_encoder = nn.Linear(1, n_obs, bias=False)
-        # self.Wr = nn.Parameter(torch.randn(hidden_size, hidden_size))
-        # self.Win = nn.Parameter(torch.randn(hidden_size, n_dir))
-
-        # self.Wout = nn.Parameter(torch.randn(n_obs, hidden_size))
         self.Wr = torch.randn(hidden_size, hidden_size)
         self.Win = torch.randn(hidden_size, n_dir)
 
@@ -77,13 +67,13 @@ class tPCN(nn.Module):
         
         self.h = torch.relu
         self.f = torch.softmax
+        self.norm = lambda x: x / (torch.norm(x) + 1e-6)
         
         self.memory_size = memory_size
         self.obs_memory = deque(maxlen=memory_size)
         self.direction_memory = deque(maxlen=memory_size)
         self.prev_state = torch.randn([hidden_size, 1])
-        self.prev_state = self.prev_state / (torch.norm(self.prev_state) + 1e-6)
-    
+        self.prev_state = self.norm(self.prev_state)
 
     def softmax_jacobian(self, z):
         f = torch.softmax(z, dim=0).squeeze()
@@ -98,45 +88,48 @@ class tPCN(nn.Module):
     
     def reset(self):
         self.prev_state = torch.randn([self.hidden_size, 1])
-        self.prev_state = self.prev_state / (torch.norm(self.prev_state) + 1e-6)
+        self.prev_state = self.norm(self.prev_state)
         self.obs_memory = deque(maxlen=self.memory_size)
         self.direction_memory = deque(maxlen=self.memory_size)
         return self
     
-    def forward(self, direction):
-        # current_obs = torch.FloatTensor(self.obs_memory[-1])
-        # direction = torch.FloatTensor([direction])
-        # obs_embed = self.obs_encoder(current_obs).T
-        # direction_embed = self.direction_encoder(direction).unsqueeze(1)
-        # print(obs_embed.shape)
-        # print(direction_embed.shape)
+    def forward(self, direction, obs):
 
         direction_embed = self.encode(direction, mode="dir")
-        obs_embed = self.encode(self.obs_memory[-1], mode="obs")
+        obs_embed = self.encode(obs, mode="obs")
         current_state = self.h(torch.mm(self.Wr, self.prev_state) + torch.mm(self.Win, direction_embed))
-        current_state = current_state / (torch.norm(current_state) + 1e-6)
+        current_state = self.norm(current_state)
         prev_state = self.prev_state.detach().clone()
         i = 0
         while i < self.max_iter and abs(float(torch.mean(prev_state - current_state))) > self.tol:
             eps_p = obs_embed - self.f(torch.mm(self.Wout, current_state), dim=0)
             eps_g = current_state - self.h(torch.mm(self.Wr, prev_state) + torch.mm(self.Win, direction_embed))
             prev_state = current_state.detach().clone()
-            current_state = current_state + self.lr_iter * (-0.1*eps_g +\
+            current_state = current_state + self.lr_iter * (-eps_g +\
                                     torch.mm(self.Wout.t(),
                                              torch.mm(self.softmax_jacobian(torch.mm(self.Wout, current_state)), eps_p)))
-            current_state = current_state / (torch.norm(current_state) + 1e-6)
+            current_state = self.norm(current_state)
             i += 1
         next_obs_pred = self.f(torch.mm(self.Wout, current_state), dim=0)
         return next_obs_pred, current_state
 
-    def optim_step(self, direction):
+    def optim_step(self, direction, obs):
         direction_embed = self.encode(direction, mode="dir")
-        obs_embed = self.encode(self.obs_memory[-1], mode="obs")
-        next_pred_state, current_state = self.forward(direction)
+        obs_embed = self.encode(obs, mode="obs")
+        next_pred_state, current_state = self.forward(direction, obs)
         eps_p = obs_embed - self.f(torch.mm(self.Wout, current_state), dim=0)
         eps_g = current_state - self.h(torch.mm(self.Wr, self.prev_state) + torch.mm(self.Win, direction_embed))
-        delta_Wout = torch.mm(torch.mm(self.softmax_jacobian(torch.mm(self.Wout, current_state)), eps_p), current_state.T)
         predicted_state = torch.mm(self.Wr, self.prev_state) + torch.mm(self.Win, direction_embed)
+
+        delta_Wout = torch.mm(
+                              torch.mm(
+                                self.softmax_jacobian(
+                                    torch.mm(self.Wout, current_state)
+                                ), 
+                                eps_p
+                            ), 
+                            current_state.T
+                        )
         delta_Wr = torch.mm(
                             torch.mm(
                                 self.relu_jacobian(
@@ -155,10 +148,10 @@ class tPCN(nn.Module):
                     ),
                     direction_embed.T
                 )
-        # delta_Wout = delta_Wout * (0.1 / (torch.norm(delta_Wout) + 1e-6))
-        self.Win = self.Win + self.lr_Win * delta_Win
-        self.Wr = self.Wr + self.lr_Wr * delta_Wr
-        self.Wout = self.Wout + self.lr_Wout * delta_Wout
+        with torch.no_grad():
+            self.Win = self.Win + self.lr_Win * delta_Win
+            self.Wr = self.Wr + self.lr_Wr * delta_Wr
+            self.Wout = self.Wout + self.lr_Wout * delta_Wout
         # print(
         #     f"Gradients: "
         #     f"Wout={torch.norm(delta_Wout):.3f}, "
@@ -224,7 +217,6 @@ class tPCAgent:
                          tol=tol,
                          n_obs=n_obs, 
                          n_dir=n_dir)
-        # self.optimizer = optim.Adam(self.tpcn.parameters(), lr=1e-3)
         self.loss_fn = CombinedLoss()
         self._rng = np.random.default_rng(seed=42)
         self.n_obs = n_obs
@@ -241,29 +233,21 @@ class tPCAgent:
         
         with torch.autograd.set_detect_anomaly(True):
             self.tpcn.update_memory(next_obs, direction)
-            next_obs = torch.FloatTensor([next_obs])
             direction_embed = self.tpcn.encode(direction, mode="dir")
-            # pred, current_state = self.tpcn(direction)
-            # prev_state = self.tpcn.h(torch.mm(self.tpcn.Wr, self.tpcn.prev_state) + torch.mm(self.tpcn.Win, direction_embed))
-            # loss = self.loss_fn(pred, self.tpcn.encode(next_obs, mode="obs").detach(), prev_state, current_state.detach())
-            # print(loss)
 
-            next_pred_state, current_state = self.tpcn.optim_step(direction)
+            next_pred_state, current_state = self.tpcn.optim_step(direction, next_obs)
             prev_state = self.tpcn.h(torch.mm(self.tpcn.Wr, self.tpcn.prev_state) + torch.mm(self.tpcn.Win, direction_embed))
             loss, loss_p, loss_g = self.loss_fn(next_pred_state, self.tpcn.encode(next_obs, mode="obs").detach(), prev_state, current_state.detach())
             
             self.losses.append(loss)
             self.losses_p.append(loss_p)
             self.losses_g.append(loss_g)
-            # self.optimizer.zero_grad()
-            # loss.backward()
-            # self.optimizer.step()
         
     def predict_observation(self, direction):
         with torch.no_grad():
-            pred, _ = self.tpcn(direction)
-            pred = self.tpcn.decode(pred, mode="obs")
-            return pred
+            pred_proba, _ = self.tpcn(direction, self.tpcn.obs_memory[-1])
+            pred = self.tpcn.decode(pred_proba, mode="obs")
+            return pred, pred_proba
     
     def act(self, avaiable_actions: int) -> int:
         action = self._rng.integers(avaiable_actions)
