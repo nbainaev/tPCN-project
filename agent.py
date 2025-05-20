@@ -20,9 +20,11 @@ import torch.optim as optim
 from collections import deque
 from torch.nn import functional as F
 from torch import Tensor
+from typing import Optional
 
 
 class CombinedLoss(nn.MSELoss):
+    
     def __init__(self):
         super(CombinedLoss, self).__init__()
     
@@ -43,7 +45,8 @@ class tPCN(nn.Module):
                  lr_Wout=0.001,
                  tol=0.001,
                  n_obs=5, 
-                 n_dir=4):
+                 n_dir=4,
+                 loss="mse"):
         super(tPCN, self).__init__()
 
         self.n_obs = n_obs
@@ -52,6 +55,8 @@ class tPCN(nn.Module):
         self.hidden_size = hidden_size
         self.tol = tol
         self.lr_iter = lr_iter
+        self.loss_fn = loss
+
         self.lr_Win = lr_Win
         self.lr_Wr = lr_Wr
         self.lr_Wout = lr_Wout
@@ -103,11 +108,15 @@ class tPCN(nn.Module):
         i = 0
         while i < self.max_iter and abs(float(torch.mean(prev_state - current_state))) > self.tol:
             eps_p = obs_embed - self.f(torch.mm(self.Wout, current_state), dim=0)
+            
             eps_g = current_state - self.h(torch.mm(self.Wr, prev_state) + torch.mm(self.Win, direction_embed))
             prev_state = current_state.detach().clone()
-            current_state = current_state + self.lr_iter * (-eps_g +\
-                                    torch.mm(self.Wout.t(),
-                                             torch.mm(self.softmax_jacobian(torch.mm(self.Wout, current_state)), eps_p)))
+            if self.loss_fn == "mse":
+                current_state = current_state + self.lr_iter * (-eps_g +\
+                                        torch.mm(self.Wout.t(),
+                                                torch.mm(self.softmax_jacobian(torch.mm(self.Wout, current_state)), eps_p)))
+            elif self.loss_fn == "cross-entropy":
+                current_state = current_state + self.lr_iter * (-eps_g + torch.mm(self.Wout.T, eps_p))
             current_state = self.norm(current_state)
             i += 1
         next_obs_pred = self.f(torch.mm(self.Wout, current_state), dim=0)
@@ -121,15 +130,19 @@ class tPCN(nn.Module):
         eps_g = current_state - self.h(torch.mm(self.Wr, self.prev_state) + torch.mm(self.Win, direction_embed))
         predicted_state = torch.mm(self.Wr, self.prev_state) + torch.mm(self.Win, direction_embed)
 
-        delta_Wout = torch.mm(
-                              torch.mm(
-                                self.softmax_jacobian(
-                                    torch.mm(self.Wout, current_state)
+        if self.loss_fn == "mse":
+            delta_Wout = torch.mm(
+                                torch.mm(
+                                    self.softmax_jacobian(
+                                        torch.mm(self.Wout, current_state)
+                                    ), 
+                                    eps_p
                                 ), 
-                                eps_p
-                            ), 
-                            current_state.T
-                        )
+                                current_state.T
+                            )
+        elif self.loss_fn == "cross-entropy":
+            delta_Wout = torch.mm(eps_p, current_state.T)
+
         delta_Wr = torch.mm(
                             torch.mm(
                                 self.relu_jacobian(
@@ -207,7 +220,8 @@ class tPCAgent:
                  lr_Wout=0.001,
                  tol=0.001,
                  n_obs=5, 
-                 n_dir=4):
+                 n_dir=4,
+                 loss="mse"):
         self.tpcn = tPCN(hidden_size=hidden_size, 
                          memory_size=memory_size, 
                          max_iter=max_iter, 
@@ -217,7 +231,8 @@ class tPCAgent:
                          lr_Wout=lr_Wout,
                          tol=tol,
                          n_obs=n_obs, 
-                         n_dir=n_dir)
+                         n_dir=n_dir,
+                         loss=loss)
         self.loss_fn = CombinedLoss()
         self._rng = np.random.default_rng(seed=42)
         self.n_obs = n_obs
@@ -233,7 +248,8 @@ class tPCAgent:
     def process_step(self, next_obs, direction):
         
         with torch.autograd.set_detect_anomaly(True):
-            self.tpcn.update_memory(next_obs, direction)
+            if next_obs > 0:
+                self.tpcn.update_memory(next_obs, direction)
             direction_embed = self.tpcn.encode(direction, mode="dir")
 
             next_pred_state, current_state = self.tpcn.optim_step(direction, next_obs)
