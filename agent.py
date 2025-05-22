@@ -1,19 +1,4 @@
 import numpy as np
-import random as rd
-
-# class tPCAgent():
-#     def __init__(self):
-#         self._rng = np.random.default_rng(seed=42)
-    
-#     def predict_obs(self, obss: list, actions: list) -> int:
-#         pred_obs = rd.choice(obss)
-#         return pred_obs
-
-#     def act(self, avaiable_actions: int) -> int:
-#         action = self._rng.integers(avaiable_actions)
-#         return action
-
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -29,10 +14,7 @@ from torch import Tensor
 
 class CombinedLoss(nn.Module):
     def __init__(self, loss_mode="cross-entropy"):
-        """
-        Combined MSE loss that returns per-batch-item losses.
-        Always outputs tensor of shape (n_batch,).
-        """
+
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss(reduction='none')
         self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
@@ -42,33 +24,16 @@ class CombinedLoss(nn.Module):
                 target_p: Tensor,
                 input_g: Tensor, 
                 target_g: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
-        """
-        Compute per-item combined loss.
-        
-        Args:
-            input_p: Prediction states (n_batch, ...)
-            target_p: Target states (n_batch, ...)
-            input_g: Prediction observations (n_batch, ...)
-            target_g: Target observations (n_batch, ...)
-            
-        Returns:
-            Tuple of tensors with shape (n_batch,):
-            - total_loss (per-item)
-            - prediction_loss (per-item)
-            - state_loss (per-item)
-        """
-        # Calculate MSE losses (per-element)
+
         if self.loss_mode == "mse":
             loss_p = self.mse_loss(input_p, target_p)
         else:
             loss_p = self.cross_entropy(input_p, target_p)
         loss_g = self.mse_loss(input_g, target_g)
-        
-        # Reduce to per-batch-item (n_batch,)
+
         loss_p = loss_p.view(loss_p.size(0), -1).mean(dim=1)
         loss_g = loss_g.view(loss_g.size(0), -1).mean(dim=1)
-        
-        # Combined loss
+
         total_loss = loss_p + loss_g
         
         return total_loss, loss_p, loss_g
@@ -84,6 +49,7 @@ class tPCN(nn.Module):
                  tol=0.001,
                  n_obs=5, 
                  n_dir=4,
+                 mdp_mode='pomdp',
                  batch_size=None,
                  loss="mse"):
         super(tPCN, self).__init__()
@@ -96,6 +62,7 @@ class tPCN(nn.Module):
         self.lr_iter = lr_iter
         self.loss_fn = loss
         self.batch_size = batch_size
+        self.mdp_mode=mdp_mode
 
         self.lr_Win = lr_Win
         self.lr_Wr = lr_Wr
@@ -119,28 +86,22 @@ class tPCN(nn.Module):
         self.prev_states = self.norm(self.prev_states)
 
     def softmax_jacobian(self, z):
-        # z shape: (batch_size, output_dim)
         z = z.squeeze(2)
-        f = torch.softmax(z, dim=1)  # shape: (batch_size, output_dim)
-        
-        # Create batch of identity matrices
+        f = torch.softmax(z, dim=1) 
+
         eye = torch.eye(
             f.size(1), 
             device=z.device
-        ).unsqueeze(0).expand(f.size(0), -1, -1)  # shape: (batch_size, output_dim, output_dim)
-        
-        # Compute J = diag(f) - f.T @ f for each batch element
-        J = eye * f.unsqueeze(2) - torch.bmm(f.unsqueeze(2), f.unsqueeze(1))  # shape: (batch_size, output_dim, output_dim)
+        ).unsqueeze(0).expand(f.size(0), -1, -1) 
+        J = eye * f.unsqueeze(2) - torch.bmm(f.unsqueeze(2), f.unsqueeze(1))
         
         return J
     
     def relu_jacobian(self, x):
         x = x.squeeze(2)
-        # x shape: (batch_size, state_dim)
-        deriv_mask = (x > 0).float()  # shape: (batch_size, state_dim)
-        
-        # Create batch of diagonal matrices
-        J = torch.diag_embed(deriv_mask)  # shape: (batch_size, state_dim, state_dim)
+        deriv_mask = (x > 0).float() 
+
+        J = torch.diag_embed(deriv_mask) 
         
         return J
     
@@ -152,12 +113,9 @@ class tPCN(nn.Module):
         return self
     
     def forward(self, directions, obs):
-        # directions shape: (batch_size,)
-        # obs shape: (batch_size,)
-        
-        # One-hot encoding for batch
-        directions_embed = self.encode(directions, mode="dir")  # shape: (batch_size, dir_vocab_size)
-        obs_embed = self.encode(obs, mode="obs")  # shape: (batch_size, obs_vocab_size)
+
+        directions_embed = self.encode(directions, mode="dir") 
+        obs_embed = self.encode(obs, mode="obs") 
 
         Win_batch = self.Win.unsqueeze(0).expand(self.batch_size, -1, -1)
         Wr_batch = self.Wr.unsqueeze(0).expand(self.batch_size, -1, -1)
@@ -235,55 +193,72 @@ class tPCN(nn.Module):
             self.Win = self.Win + self.lr_Win * delta_Win.mean(dim=0)
             self.Wr = self.Wr + self.lr_Wr * delta_Wr.mean(dim=0)
             self.Wout = self.Wout + self.lr_Wout * delta_Wout.mean(dim=0)
-        # print(
-        #     f"Gradients: "
-        #     f"Wout={torch.norm(delta_Wout):.3f}, "
-        #     f"Wr={torch.norm(delta_Wr):.3f}, "
-        #     f"Win={torch.norm(delta_Win):.3f}"
-        # )
+
         return next_pred_states, current_states
     
     def decode(self, x, mode="obs"):
-        # Проверяем, что вход - это батч (тензор с размерностью >= 2)
         if len(x.shape) == 1:
-            x = x.unsqueeze(0)  # Если на входе вектор, превращаем его в батч из 1 элемента
+            x = x.unsqueeze(0)
         
-        N = x.shape[0]  # Размер батча
+        N = x.shape[0] 
         decoded_values = []
         
         if mode == "obs":
-            decode_dict = self.obs_decode_dict
+            if self.mdp_mode == 'mdp':
+                x_vecs = x[:, :self.n_obs // 2]
+                y_vecs = x[:, self.n_obs // 2:]
+                x_coords = torch.argmax(x_vecs, dim=1)
+                y_coords = torch.argmax(y_vecs, dim=1)
+                return torch.cat((x_coords, y_coords), dim=1)
+            else:
+                decode_dict = self.obs_decode_dict
         else:
             decode_dict = self.dir_decode_dict
-        
-        # Для каждого элемента в батче находим argmax и декодируем
+
         for i in range(N):
             n = int(torch.argmax(x[i]))
             if n not in decode_dict:
-                n = 0  # Значение по умолчанию, если индекса нет в словаре
+                n = 0
             decoded_values.append(decode_dict[n])
         
-        return decoded_values if N > 1 else decoded_values[0]  # Возвращаем список или одно значение
-    
+        return decoded_values if N > 1 else decoded_values[0] 
+
+
     def encode(self, x, mode="obs"):
-        # Преобразуем вход в список, если это не батч
+
         if not isinstance(x, (list, tuple, torch.Tensor, np.ndarray)):
             x = [x]
-        
-        # Преобразуем все элементы в int
-        #x = [int(val) for val in x]
-        N = len(x)  # Размер батча
-        
-        if mode == "obs":
+
+        N = len(x) 
+
+        if mode == "obs" and self.mdp_mode == 'pomdp':
             encode_dict = self.obs_encode_dict
             decode_dict = self.obs_decode_dict
-            n_total = self.n_obs  # Общее количество возможных значений
+            n_total = self.n_obs 
+        elif mode == "obs" and self.mdp_mode == 'mdp':
+            vec = None
+            obs_len = self.n_obs // 2
+
+            for i, (x_coord, y_coord) in enumerate(x):
+                if not self.active_episodes[i]:
+                    x_embed = torch.zeros((1, obs_len))
+                    x_embed[0, int(x_coord)] = 1.0
+                    y_embed = torch.zeros((1, obs_len))
+                    y_embed[0, int(y_coord)] = 1.0
+                    embed = torch.cat((x_embed, y_embed), dim=1)
+                else:
+                    embed = torch.zeros((1, self.n_obs))
+                if vec is None:
+                    vec = embed
+                else:
+                    vec = torch.cat((vec, embed))
+            return vec.unsqueeze(2)
         else:
             encode_dict = self.dir_encode_dict
             decode_dict = self.dir_decode_dict
             n_total = self.n_dir
 
-        # Добавляем новые значения в словарь, если их там нет
+
         for i, val in enumerate(x):
             if val not in encode_dict:
                 if not self.active_episodes[i]:
@@ -292,14 +267,14 @@ class tPCN(nn.Module):
                     encode_dict[val] = new_idx
                     decode_dict[new_idx] = val
         
-        # Создаем тензор нулей размера N x C
+
         C = n_total
         vec = torch.zeros((N, C), dtype=torch.float32)
-        # print(x.shape)
-        # print(self.active_episodes)
-        # Заполняем one-hot кодировку
+
         for i, val in enumerate(x):
+            
             if not self.active_episodes[i]:
+                val = int(val)
                 idx = encode_dict[val]
                 vec[i, idx] = 1.0
         
@@ -324,6 +299,7 @@ class tPCAgent:
                  tol=0.001,
                  n_obs=5, 
                  n_dir=4,
+                 mdp_mode='pomdp',
                  batch_size=32,
                  loss="mse"):
         self.tpcn = tPCN(hidden_size=hidden_size, 
@@ -335,6 +311,7 @@ class tPCAgent:
                          tol=tol,
                          n_obs=n_obs, 
                          n_dir=n_dir,
+                         mdp_mode=mdp_mode,
                          batch_size=batch_size,
                          loss=loss)
         self.loss_fn = CombinedLoss(loss_mode=loss)
@@ -353,42 +330,35 @@ class tPCAgent:
         return self   
     
     def process_step(self, next_obs_batch, directions_batch, active_episodes):
-        """
-        Process a batch of observations and directions
-        
-        Args:
-            next_obs_batch: Tensor of shape (batch_size,) - batch of next observations
-            directions_batch: Tensor of shape (batch_size,) - batch of directions
-        """
-        #print(next_obs_batch, directions_batch, active_episodes)
+
+
         with torch.autograd.set_detect_anomaly(True):
             
             self.tpcn.update_memory(next_obs_batch, directions_batch, active_episodes)
 
-            # Encode the entire batch
+
             directions_embed = self.tpcn.encode(directions_batch, mode="dir")
-            
-            # Process the entire batch through TPCN
+
             next_pred_states, current_states = self.tpcn.optim_step(directions_batch, next_obs_batch)
 
-            # Compute previous states for the batch
+
             prev_states = self.tpcn.h(
                 torch.bmm(self.tpcn.Wr.unsqueeze(0).expand(self.batch_size, -1, -1), self.tpcn.prev_states) + 
                 torch.bmm(self.tpcn.Win.unsqueeze(0).expand(self.batch_size, -1, -1), directions_embed)
             )
             
-            # Compute loss for the batch
+
             target_obs_embed = self.tpcn.encode(next_obs_batch, mode="obs").detach()
             target_states = current_states.detach()
             
             loss, loss_p, loss_g = self.loss_fn(
-                next_pred_states,  # predictions
-                target_obs_embed,  # target observations
-                prev_states,       # previous states
-                target_states      # target states
+                next_pred_states,  
+                target_obs_embed,  
+                prev_states,       
+                target_states     
             )
 
-            # Store mean losses for the batch
+  
             self.losses.append(loss)
             self.losses_p.append(loss_p)
             self.losses_g.append(loss_g)

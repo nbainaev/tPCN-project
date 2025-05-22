@@ -27,24 +27,13 @@ def make_sync_envs(
     num_envs: int = 4,
     render_mode: Optional[str] = None
 ) -> gym.vector.VectorEnv:
-    """
-    Создает синхронизированные копии кастомной среды
-    
-    Args:
-        env_creator: Функция, создающая экземпляр среды
-        num_envs: Количество сред
-        render_mode: Режим рендеринга
-        
-    Returns:
-        Векторизированная среда с поддержкой кастомных методов
-    """
+ 
     class WrappedSyncVectorEnv(SyncVectorEnv):
-        """Обертка для поддержки кастомных методов"""
+
         def __getattr__(self, name):
             if name.startswith('_'):
                 raise AttributeError(name)
-            
-            # Проксируем вызовы кастомных методов
+ 
             def handler(*args, **kwargs):
                 results = []
                 for env in self.envs:
@@ -53,13 +42,13 @@ def make_sync_envs(
                 return results
             return handler
 
-    # Создаем список фабрик сред
+
     env_fns = [lambda: env_creator() for _ in range(num_envs)]
     
-    # Инициализируем векторную среду
+
     envs = WrappedSyncVectorEnv(env_fns)
     
-    # Устанавливаем режим рендеринга для всех сред
+
     if render_mode:
         for env in envs.envs:
             env.render_mode = render_mode
@@ -76,22 +65,29 @@ def read_config(filepath):
 
 
 if __name__ == '__main__':
-    conf_path = 'config/pomdp.yaml'
+    conf_mdp_path = 'config/mdp.yaml'
+    conf_pomdp_path = 'config/pomdp.yaml'
     setup_path = 'config/free.yaml'
     run_path = 'config/run.yaml'
     agent_conf_path = 'config/agent_conf.yaml'
     seed = 10
     
-    conf = read_config(conf_path)
+    
+    
     setup = read_config(setup_path)
     run = read_config(run_path)
     agent_conf = read_config(agent_conf_path)
     log_update_rate = run["log_update_rate"]
+
+    if run['mdp_mode'] == 'mdp':
+        n_obs = 2*len(setup['room'][0][0])
+        conf = read_config(conf_mdp_path)
+    else:
+        n_obs = len(np.unique(setup['room'])) + 1
+        conf = read_config(conf_pomdp_path)
     if "start_position" in setup:
-        # check that config has start position parameter
         ini_pos = setup.pop("start_position")
     else:
-        # if None, initial agent's position is random
         ini_pos = (None, None)
 
 
@@ -100,7 +96,6 @@ if __name__ == '__main__':
         num_envs=run['batch_size'],
     )
     if run['log']:
-        # start wandb logger
         logger = wandb.init(
             project=run['project_name'], entity=os.environ['WANDB_ENTITY'],
             config=conf
@@ -109,16 +104,16 @@ if __name__ == '__main__':
         logger = None
     episodes = run['episodes']
     steps = run['steps']
-    n_obs = len(np.unique(setup['room'])) + 1
-    agent = tPCAgent(n_obs=n_obs, batch_size=run['batch_size'], **agent_conf)
+
+    agent = tPCAgent(n_obs=n_obs, mdp_mode=run['mdp_mode'], batch_size=run['batch_size'], **agent_conf)
     legend = []
     losses = np.array([])
     losses_p = np.array([])
     losses_g = np.array([])
     accuracy = np.array([])
-    # run several episodes
+
     for episode in tqdm(range(episodes), desc="Processing"):
-        # Reset environment with optional starting position
+
         if ini_pos is not None:
             observations, infos = envs.reset(options={'start_r': ini_pos[0], 'start_c': ini_pos[1]})
         else:
@@ -132,33 +127,31 @@ if __name__ == '__main__':
         true_observations = []
 
         active_episodes = [False] * run['batch_size']
-        # do steps in one episode
         for step in range(steps):
             
             if step > 0:
 
-                action_idx = agent.act(4)  # Use action_space.n for number of actions
-                action = action_idx  # Assuming discrete actions
+                action_idx = agent.act(4)
+                action = action_idx 
                 actions.append(action)
 
                 observation, observation_proba = agent.predict_observation(action)
-
-                observation = np.array(observation, dtype=np.float32)
+                if run['mdp_mode'] == 'mdp':
+                    observation = observation.numpy().astype(np.float32)
+                else:
+                    observation = np.array(observation, dtype=np.float32)
                 for i, active in enumerate(active_episodes):
                     if active:
                         observation[i] = np.nan
                 pred_observations.append(observation)
                 
-                # Execute action in environment
-                observations, rewards, terminated, truncated, infos = envs.step(action)
 
-            # Process observation
+                observations, rewards, terminated, truncated, infos = envs.step(action)
             obs = observations[0] if isinstance(observations, list) else observations.squeeze()
             
             
             if step > 0:
                 obs = np.array(obs, dtype=np.float32)
-                # Process step with agent
                 for i, active in enumerate(active_episodes):
                     if active:
                         obs[i] = np.nan
@@ -168,7 +161,6 @@ if __name__ == '__main__':
                     if term:
                         active_episodes[i] = True
             elif step == 0:
-                # Initialize agent's memory with first observation
                 prev_obs = obs
                 agent.tpcn.update_memory(obs=obs, active_episodes=active_episodes)
 
@@ -181,12 +173,15 @@ if __name__ == '__main__':
         losses_g = np.append(losses_g, agent.losses_g[-1].mean())
         true_observations = np.array(true_observations)
         pred_observations = np.array(pred_observations)
+        if true_observations.ndim == 2:
+            true_observations = true_observations[:, :, np.newaxis]
+            pred_observations = pred_observations[:, :, np.newaxis]
         acc_buf = []
-        for i in range(run['batch_size']):
-            true_obs = true_observations[:, i]
-            pred_obs = pred_observations[:, i]
 
-            acc_buf.append((true_obs[~np.isnan(true_obs)] == pred_obs[~np.isnan(pred_obs)]).sum() / len(pred_obs))
+        for i in range(run['batch_size']):
+            true_obs = true_observations[:, i, :]
+            pred_obs = pred_observations[:, i, :]
+            acc_buf.append(np.where(~np.isnan(true_obs) & ~np.isnan(pred_obs), true_obs == pred_obs, False).min(axis=1).sum() / len(pred_obs))
         acc_buf = np.array(acc_buf)
         accuracy = np.append(accuracy, acc_buf.mean())
 
