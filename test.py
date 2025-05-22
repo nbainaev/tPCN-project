@@ -94,7 +94,7 @@ if __name__ == '__main__':
         # if None, initial agent's position is random
         ini_pos = (None, None)
 
-    # env = GridWorld(setup['room'], **conf)
+
     envs = make_sync_envs(
         env_creator=lambda: GridWorld(setup['room'], **conf),
         num_envs=run['batch_size'],
@@ -131,48 +131,65 @@ if __name__ == '__main__':
         pred_observations = []
         true_observations = []
 
-        
+        active_episodes = [False] * run['batch_size']
         # do steps in one episode
         for step in range(steps):
+            
             if step > 0:
-                # Get action from agent (assuming agent.act returns action index)
-                # print(envs.action_space.shape)
-                # action_shape = envs.action_space.shape[0] - 1
+
                 action_idx = agent.act(4)  # Use action_space.n for number of actions
                 action = action_idx  # Assuming discrete actions
                 actions.append(action)
-                
-                # Get predicted observation from agent
+
                 observation, observation_proba = agent.predict_observation(action)
+
+                observation = np.array(observation, dtype=np.float32)
+                for i, active in enumerate(active_episodes):
+                    if active:
+                        observation[i] = np.nan
                 pred_observations.append(observation)
                 
                 # Execute action in environment
                 observations, rewards, terminated, truncated, infos = envs.step(action)
-            
+
             # Process observation
             obs = observations[0] if isinstance(observations, list) else observations.squeeze()
             
             
             if step > 0:
+                obs = np.array(obs, dtype=np.float32)
                 # Process step with agent
+                for i, active in enumerate(active_episodes):
+                    if active:
+                        obs[i] = np.nan
                 true_observations.append(obs)
-                agent.process_step(obs, action)
+                agent.process_step(obs, action, active_episodes)
+                for i, term in enumerate(terminated):
+                    if term:
+                        active_episodes[i] = True
             elif step == 0:
                 # Initialize agent's memory with first observation
                 prev_obs = obs
-                agent.tpcn.update_memory(obs=obs)
-            
-            # finish episode early if terminal state is entered
-            # if terminated or truncated:
-            #     break
+                agent.tpcn.update_memory(obs=obs, active_episodes=active_episodes)
+
+            if np.all(active_episodes):
+                break
+        
+
         losses = np.append(losses, agent.losses[-1].mean())
         losses_p = np.append(losses_p, agent.losses_p[-1].mean())
         losses_g = np.append(losses_g, agent.losses_g[-1].mean())
         true_observations = np.array(true_observations)
         pred_observations = np.array(pred_observations)
-        accuracy = np.append(accuracy, ((true_observations == pred_observations).sum(axis=0) / pred_observations.shape[0]).mean())
-        #print(accuracy.shape)
-        #print(f"Accuracy on episode {episode}: {accuracy[-1]}")
+        acc_buf = []
+        for i in range(run['batch_size']):
+            true_obs = true_observations[:, i]
+            pred_obs = pred_observations[:, i]
+
+            acc_buf.append((true_obs[~np.isnan(true_obs)] == pred_obs[~np.isnan(pred_obs)]).sum() / len(pred_obs))
+        acc_buf = np.array(acc_buf)
+        accuracy = np.append(accuracy, acc_buf.mean())
+
         if logger is not None:
             logger.log(
                 {

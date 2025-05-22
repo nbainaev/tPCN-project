@@ -28,14 +28,15 @@ import torch.nn as nn
 from torch import Tensor
 
 class CombinedLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, loss_mode="cross-entropy"):
         """
         Combined MSE loss that returns per-batch-item losses.
         Always outputs tensor of shape (n_batch,).
         """
         super(CombinedLoss, self).__init__()
         self.mse_loss = nn.MSELoss(reduction='none')
-    
+        self.cross_entropy = nn.CrossEntropyLoss(reduction='none')
+        self.loss_mode = loss_mode
     def forward(self, 
                 input_p: Tensor, 
                 target_p: Tensor,
@@ -57,7 +58,10 @@ class CombinedLoss(nn.Module):
             - state_loss (per-item)
         """
         # Calculate MSE losses (per-element)
-        loss_p = self.mse_loss(input_p, target_p)
+        if self.loss_mode == "mse":
+            loss_p = self.mse_loss(input_p, target_p)
+        else:
+            loss_p = self.cross_entropy(input_p, target_p)
         loss_g = self.mse_loss(input_g, target_g)
         
         # Reduce to per-batch-item (n_batch,)
@@ -104,7 +108,7 @@ class tPCN(nn.Module):
         self.obs_decode_dict = {}
         self.dir_encode_dict = {}
         self.dir_decode_dict = {}
-        
+        self.active_episodes = []
         self.h = torch.nn.ReLU()
         self.f = torch.nn.Softmax(dim=1)
         self.norm = lambda x: x / (torch.norm(x, dim=1, keepdim=True) + 1e-6)
@@ -120,7 +124,10 @@ class tPCN(nn.Module):
         f = torch.softmax(z, dim=1)  # shape: (batch_size, output_dim)
         
         # Create batch of identity matrices
-        eye = torch.eye(f.size(1), device=z.device).unsqueeze(0).expand(f.size(0), -1, -1)  # shape: (batch_size, output_dim, output_dim)
+        eye = torch.eye(
+            f.size(1), 
+            device=z.device
+        ).unsqueeze(0).expand(f.size(0), -1, -1)  # shape: (batch_size, output_dim, output_dim)
         
         # Compute J = diag(f) - f.T @ f for each batch element
         J = eye * f.unsqueeze(2) - torch.bmm(f.unsqueeze(2), f.unsqueeze(1))  # shape: (batch_size, output_dim, output_dim)
@@ -264,7 +271,7 @@ class tPCN(nn.Module):
             x = [x]
         
         # Преобразуем все элементы в int
-        x = [int(val) for val in x]
+        #x = [int(val) for val in x]
         N = len(x)  # Размер батча
         
         if mode == "obs":
@@ -277,25 +284,31 @@ class tPCN(nn.Module):
             n_total = self.n_dir
 
         # Добавляем новые значения в словарь, если их там нет
-        for val in x:
+        for i, val in enumerate(x):
             if val not in encode_dict:
-                new_idx = len(encode_dict)
-                encode_dict[val] = new_idx
-                decode_dict[new_idx] = val
+                if not self.active_episodes[i]:
+                    val = int(val)
+                    new_idx = len(encode_dict)
+                    encode_dict[val] = new_idx
+                    decode_dict[new_idx] = val
         
         # Создаем тензор нулей размера N x C
         C = n_total
         vec = torch.zeros((N, C), dtype=torch.float32)
-        
+        # print(x.shape)
+        # print(self.active_episodes)
         # Заполняем one-hot кодировку
         for i, val in enumerate(x):
-            idx = encode_dict[val]
-            vec[i, idx] = 1.0
+            if not self.active_episodes[i]:
+                idx = encode_dict[val]
+                vec[i, idx] = 1.0
         
         return vec.unsqueeze(2)
 
-    def update_memory(self, obs, directions=None):
+    def update_memory(self, obs, directions=None, active_episodes=None):
         self.obs_memory = obs
+        if active_episodes is not None:
+            self.active_episodes = active_episodes
         if directions is not None:
             self.directions_memory = directions
 
@@ -324,7 +337,7 @@ class tPCAgent:
                          n_dir=n_dir,
                          batch_size=batch_size,
                          loss=loss)
-        self.loss_fn = CombinedLoss()
+        self.loss_fn = CombinedLoss(loss_mode=loss)
         self._rng = np.random.default_rng(seed=42)
         self.n_obs = n_obs
         self.batch_size = batch_size
@@ -339,7 +352,7 @@ class tPCAgent:
         self.losses_g = []
         return self   
     
-    def process_step(self, next_obs_batch, directions_batch):
+    def process_step(self, next_obs_batch, directions_batch, active_episodes):
         """
         Process a batch of observations and directions
         
@@ -347,17 +360,11 @@ class tPCAgent:
             next_obs_batch: Tensor of shape (batch_size,) - batch of next observations
             directions_batch: Tensor of shape (batch_size,) - batch of directions
         """
+        #print(next_obs_batch, directions_batch, active_episodes)
         with torch.autograd.set_detect_anomaly(True):
-            # Filter out negative observations (if needed)
-            # valid_mask = next_obs_batch > 0
-            # if valid_mask.any():
-            #     valid_obs = next_obs_batch[valid_mask]
-            #     valid_directions = directions_batch[valid_mask]
-                
-            #     # Update memory only for valid observations
-            #     for obs, dir in zip(valid_obs, valid_directions):
-            #         self.tpcn.update_memory(obs, dir)
-            self.tpcn.update_memory(next_obs_batch, dir)
+            
+            self.tpcn.update_memory(next_obs_batch, directions_batch, active_episodes)
+
             # Encode the entire batch
             directions_embed = self.tpcn.encode(directions_batch, mode="dir")
             
@@ -380,6 +387,7 @@ class tPCAgent:
                 prev_states,       # previous states
                 target_states      # target states
             )
+
             # Store mean losses for the batch
             self.losses.append(loss)
             self.losses_p.append(loss_p)
