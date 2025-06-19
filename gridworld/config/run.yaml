@@ -1,0 +1,8 @@
+log: false
+project_name: "gridworld-memory-agent"
+log_update_rate: 50
+episodes: 100
+steps: 100
+batch_size: 32
+mdp_mode: 'pomdp'
+is_fixed: true
