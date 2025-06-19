@@ -1,0 +1,26 @@
+n_epochs: 60
+n_steps: 1
+batch_size: 128
+sequence_length: 100
+obs_size: 6
+latent_size: 512
+dir_size: 4
+
+out_activation: softmax
+rec_activation: relu
+
+learning_rate: 0.0005
+inf_iters: 5
+test_inf_iters: 5
+inf_lr: 0.001
+
+sweep: true
+save_every: 10
+evaluation: true
+eval_every: 5
+
+validate_with_ini_pos: None
+mode: pomdp
+device: cpu
+data_path: data
+use_preloaded: true
