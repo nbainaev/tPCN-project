@@ -10,6 +10,144 @@ from src.data_utils.preload_data import *
 import src.utils
 import wandb
 
+import os
+from tqdm import tqdm
+
+from src.data_utils.preload_data import *
+import src.utils
+
+class BaselineTrainer(object):
+    def __init__(self, model, env, options):
+        self.model = model
+        self.options = options
+        self.traj_gen = TrajectoryGenerator(env, options)
+        self.acc = {'mean': [], 'std': []}
+        self.acc_eval = {'mean': [], 'std': []}
+        self.acc_time = {'epoch': [], 'acc': {'mean': [], 'std': []}}
+        self.acc_time_eval = {'epoch': [], 'acc': {'mean': [], 'std': []}}
+        self.loss = None
+        self.energy = None
+        self.n_epochs = options['n_epochs']
+    def train(self, ini_pos=None, save=True):
+
+        if self.options['use_preloaded']:
+            dpath = self.options['data_path'] if self.options['data_path'] is not None else 'data'
+            path = os.path.join(
+                dpath, 
+                f'{self.options['mode']}_{self.options['batch_size']*self.options['n_steps']}_{self.options['sequence_length']}_{self.options['obs_size']}_encode=False'
+            )
+            # check if the file exists
+            if os.path.exists(path):
+                print(f'Loading pre-generated data at {path}...')
+            else:
+                print(f'Generating new data at {path}...')
+                self.traj_gen.generate_traj_data(ini_pos, path=path, encode=False)
+
+            dataloader = get_traj_loader(path, self.options)
+
+        # if self.options.is_wandb == True and self.options.sweep == False:
+        #     wandb.init(project='place-cell-tpc', config=self.options)
+        for epoch_idx in range(self.options['n_epochs']):
+            epoch_acc = {'mean': [], 'std': []}
+            if self.options['evaluation']:
+                epoch_acc_eval = {'mean': [], 'std': []}
+            iterable = dataloader if self.options['use_preloaded'] else range(self.options['n_steps'])
+            tbar = tqdm(iterable, leave=True)
+            for item in tbar:
+                if self.options['use_preloaded']:
+                    inputs, pc_outputs, init_actv = item
+                    inputs = inputs.numpy().squeeze()
+                    pc_outputs = pc_outputs.numpy()
+                    init_actv = init_actv.numpy().squeeze()
+                else:
+                    ini_pos = self.options['train_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['train_with_ini_pos'] else ini_pos
+                    inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos, encode=False, save=False)
+                    pc_outputs =  pc_outputs.numpy()
+                    inputs = inputs.numpy().squeeze()
+                    init_actv = init_actv.numpy().squeeze()
+                if self.options['mode'] == 'pomdp':
+                    pc_outputs = pc_outputs.squeeze(3)
+                if self.options['model'] == 'chmm':
+                    if self.options['mode'] == 'pomdp':
+                        obs_list = np.concatenate((init_actv[:, np.newaxis], pc_outputs.squeeze(2)), axis=1).astype(int)
+                    else:
+                        obs_list = np.concatenate((init_actv[:, np.newaxis, :], pc_outputs), axis=1).astype(int)
+                    self.model.observe_sequence(obs_list, inputs)
+                    pred_pos = np.array(self.model.predict_sequence(inputs.astype(int), init_actv.astype(int)))[:, 1:, :]
+                else:
+                    self.model.observe_sequence(pc_outputs, inputs, init_actv)
+                    pred_pos = self.model.predict_sequence(inputs, init_actv)
+
+                acc = np.all(pc_outputs == pred_pos, axis=2)
+                if epoch_idx + self.options['collect_acc_last'] >= self.n_epochs:
+                    if not len(self.acc_time['acc']['mean']):
+                        self.acc_time['acc']['mean'] = acc.mean(0)
+                        acc_time_batch = np.array([arr.mean(0) for arr in np.array_split(acc, self.options['aggregation_points'])])
+                        self.acc_time['acc']['std'] = acc_time_batch
+                    else:
+                        self.acc_time['acc']['mean'] += acc.mean(0)
+                        acc_time_batch = np.array([arr.mean(0) for arr in np.array_split(acc, self.options['aggregation_points'])])
+                        self.acc_time['acc']['std'] = np.concatenate((self.acc_time['acc']['std'], acc.mean(0).reshape((1, -1))), axis=0) 
+    
+                acc = acc.mean(-1)
+                acc_batch = [arr.mean(-1) for arr in np.array_split(acc, self.options['aggregation_points'])]
+                
+                epoch_acc['mean'] += [float(acc.mean())]
+                epoch_acc['std'] += [acc_batch]
+                
+                is_eval = self.options['evaluation'] and epoch_idx % self.options['eval_every'] == 0
+                
+                if is_eval:
+                    ini_pos_eval = self.options['validate_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['validate_with_ini_pos'] else ini_pos
+                    inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos_eval, save=False, encode=False)
+                    inputs = inputs[:self.options['batch_size']].numpy().squeeze()
+
+                    if self.options['mode'] == 'pomdp':
+                        pc_outputs = pc_outputs[:self.options['batch_size']].numpy().squeeze(3)
+                    else:
+                        pc_outputs = pc_outputs[:self.options['batch_size']].numpy()
+                    init_actv = init_actv[:self.options['batch_size']].numpy().squeeze()
+                    if self.options['model'] == 'chmm':
+                        if self.options['mode'] == 'pomdp':
+                            obs_list = np.concatenate((init_actv[:, np.newaxis], pc_outputs.squeeze(2)), axis=1).astype(int)
+                        else:
+                            obs_list = np.concatenate((init_actv[:, np.newaxis, :], pc_outputs), axis=1).astype(int)
+                        pred_pos = np.array(self.model.predict_sequence(inputs.astype(int), init_actv.astype(int)))[:, 1:, :]
+                    else:
+                        pred_pos = self.model.predict_sequence(inputs, init_actv)
+                    #pc_outputs_decoded = self.traj_gen.decode_trajectory(pc_outputs)
+                    # pred_pos = self.traj_gen.decode_trajectory(pred_xs)
+                    acc_eval = np.all(pc_outputs == pred_pos, axis=2)
+                    if epoch_idx + self.options['eval_every'] * self.options['collect_acc_last'] >= self.n_epochs:
+                        if not len(self.acc_time_eval['acc']['mean']):
+                            self.acc_time_eval['acc']['mean'] = acc_eval.mean(0)
+                            acc_time_batch_eval = np.array([arr.mean(0) for arr in np.array_split(acc_eval, self.options['aggregation_points'])])
+                            self.acc_time_eval['acc']['std'] = acc_time_batch_eval
+                        else:
+                            self.acc_time_eval['acc']['mean'] += acc_eval.mean(0)
+                            acc_time_batch_eval = np.array([arr.mean(0) for arr in np.array_split(acc_eval, self.options['aggregation_points'])])
+                            self.acc_time_eval['acc']['std'] = np.concatenate((self.acc_time_eval['acc']['std'], acc_time_batch_eval), axis=0)
+                    acc_eval = acc_eval.mean(-1)
+                    acc_batch_eval = [arr.mean(-1) for arr in np.array_split(acc_eval, self.options['aggregation_points'])]
+                    epoch_acc_eval['mean'] += [acc_eval.mean()]
+                    epoch_acc_eval['std'] += [acc_batch_eval]
+                desc = f'Epoch: {epoch_idx+1}/{self.options['n_epochs']}. Acc: {np.round(100 * acc.mean(), 2)}.'
+                desc += f'Acc eval: {np.round(100 * acc_eval.mean(), 2)}' if is_eval else ''
+                tbar.set_description(desc)
+
+            self.acc['mean'].append(np.array(epoch_acc['mean']).mean())
+            self.acc['std'].append(np.array(epoch_acc['std']).std())
+            if is_eval:
+                self.acc_eval['mean'].append(np.array(epoch_acc_eval['mean']).mean())
+                self.acc_eval['std'].append(np.array(epoch_acc_eval['std']).std())
+        
+        self.acc_time['acc']['mean'] /= self.options['collect_acc_last']
+        self.acc_time['acc']['std'] = self.acc_time['acc']['std'].std(0)
+        self.acc_time_eval['acc']['mean'] /= self.options['collect_acc_last']
+        self.acc_time_eval['acc']['std'] = self.acc_time_eval['acc']['std'].std(0)
+        tbar.close()
+
+
 class PCTrainer(object):
     def __init__(self, options, model, init_model, env):
         self.options = options
@@ -22,7 +160,6 @@ class PCTrainer(object):
         self.n_epochs = options['n_epochs']
         self.n_steps = options['n_steps']
         self.restore = None
-
         self.traj_gen = TrajectoryGenerator(env, options)
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), 
@@ -39,10 +176,11 @@ class PCTrainer(object):
         )
 
         self.loss = []
-        self.acc = []
+        self.acc = {'mean': [], 'std': []}
         self.energy = []
-        self.acc_eval = []
-
+        self.acc_eval = {'mean': [], 'std': []}
+        self.acc_time = {'epoch': [], 'acc': {'mean': [], 'std': []}}
+        self.acc_time_eval = {'epoch': [], 'acc': {'mean': [], 'std': []}}
         # Set up checkpoints when not tuning hyperparameters
         if options['sweep'] == False:
             self.ckpt_dir = os.path.join(options.save_dir, 'models')
@@ -140,16 +278,18 @@ class PCTrainer(object):
         for epoch_idx in range(self.n_epochs):
             epoch_loss = 0
             epoch_energy = 0
-            epoch_acc = 0
+            epoch_acc = {'std': [], 'mean': []}
+            
             if self.options['evaluation']:
-                epoch_acc_eval = 0
+                epoch_acc_eval = {'std': [], 'mean': []}
             iterable = dataloader if self.options['use_preloaded'] else range(self.n_steps)
             tbar = tqdm(iterable, leave=True)
             for item in tbar:
                 if self.options['use_preloaded']:
                     inputs, pc_outputs, init_actv = item
                 else:
-                    inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos)
+                    ini_pos = self.options['train_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['train_with_ini_pos'] else ini_pos
+                    inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos, save=False)
                 energy, loss = self.train_step(inputs, pc_outputs, init_actv)
                 pred_xs, _ = self.predict(inputs, init_actv)
 
@@ -160,22 +300,32 @@ class PCTrainer(object):
 
                 pc_outputs_decoded = self.traj_gen.decode_trajectory(pc_outputs)
                 pred_pos = self.traj_gen.decode_trajectory(pred_xs)
+                
                 acc = np.all(
                     pc_outputs_decoded == pred_pos, 
                     axis=2
-                ).mean(-1).mean()
-                # acc = torch.min(
-                #     pc_outputs.to(self.options['device']) == pred_pos, 
-                #     dim=-1
-                # ).values.mean(-1, dtype=torch.float32).mean().item()
-                
-                epoch_acc += acc
+                )
+                if epoch_idx + self.options['collect_acc_last'] >= self.n_epochs:
+                    if not len(self.acc_time['acc']['mean']):
+                        self.acc_time['acc']['mean'] = acc.mean(0)
+                        acc_time_batch = np.array([arr.mean(0) for arr in np.array_split(acc, self.options['aggregation_points'])])
+                        self.acc_time['acc']['std'] = acc_time_batch
+                    else:
+                        self.acc_time['acc']['mean'] += acc.mean(0)
+                        acc_time_batch = np.array([arr.mean(0) for arr in np.array_split(acc, self.options['aggregation_points'])])
+                        self.acc_time['acc']['std'] = np.concatenate((self.acc_time['acc']['std'], acc.mean(0).reshape((1, -1))), axis=0) 
+                acc = acc.mean(-1)
+                acc_batch = [arr.mean(-1) for arr in np.array_split(acc, self.options['aggregation_points'])]
+
+                epoch_acc['mean'] += [float(acc.mean())]
+                epoch_acc['std'] += [acc_batch]
+
                 epoch_loss += loss
                 epoch_energy += energy
                 is_eval = self.options['evaluation'] and epoch_idx % self.options['eval_every'] == 0
                 
                 if is_eval:
-                    ini_pos_eval = next(self.options['validate_with_ini_pos']) if self.options['validate_with_ini_pos'] else ini_pos
+                    ini_pos_eval = self.options['validate_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['validate_with_ini_pos'] else ini_pos
                     inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos_eval, save=False)
                     inputs = inputs[:self.options['batch_size']]
                     pc_outputs = pc_outputs[:self.options['batch_size']]
@@ -187,14 +337,26 @@ class PCTrainer(object):
 
                     pc_outputs_decoded = self.traj_gen.decode_trajectory(pc_outputs)
                     pred_pos = self.traj_gen.decode_trajectory(pred_xs)
+                    
                     acc_eval = np.all(
                         pc_outputs_decoded == pred_pos, 
                         axis=2
-                    ).mean(-1).mean()
-                    epoch_acc_eval += acc_eval
-                
-                desc = f'Epoch: {epoch_idx+1}/{self.n_epochs}. Loss: {np.round(loss, 4)}. PC Energy: {np.round(energy, 4)}. Acc: {np.round(100 * acc, 2)}.'
-                desc += f'Acc eval: {np.round(100 * acc_eval, 2)}' if is_eval else ''
+                    )
+                    if epoch_idx + self.options['eval_every'] * self.options['collect_acc_last'] >= self.n_epochs:
+                        if not len(self.acc_time_eval['acc']['mean']):
+                            self.acc_time_eval['acc']['mean'] = acc_eval.mean(0)
+                            acc_time_batch_eval = np.array([arr.mean(0) for arr in np.array_split(acc_eval, self.options['aggregation_points'])])
+                            self.acc_time_eval['acc']['std'] = acc_time_batch_eval
+                        else:
+                            self.acc_time_eval['acc']['mean'] += acc_eval.mean(0)
+                            acc_time_batch_eval = np.array([arr.mean(0) for arr in np.array_split(acc_eval, self.options['aggregation_points'])])
+                            self.acc_time_eval['acc']['std'] = np.concatenate((self.acc_time_eval['acc']['std'], acc_time_batch_eval), axis=0)
+                    acc_eval = acc_eval.mean(-1)
+                    acc_batch_eval = [arr.mean(-1) for arr in np.array_split(acc_eval, self.options['aggregation_points'])]
+                    epoch_acc_eval['mean'] += [acc_eval.mean()]
+                    epoch_acc_eval['std'] += [acc_batch_eval]
+                desc = f'Epoch: {epoch_idx+1}/{self.n_epochs}. Loss: {np.round(loss, 4)}. PC Energy: {np.round(energy, 4)}. Acc: {np.round(100 * acc.mean(), 2)}.'
+                desc += f'Acc eval: {np.round(100 * acc_eval.mean(), 2)}' if is_eval else ''
                 tbar.set_description(desc)
 
             # grad_norm = torch.norm(self.model.Wr.weight.grad, p='fro').item()
@@ -207,10 +369,12 @@ class PCTrainer(object):
             #         'grad_norm': grad_norm,
             #     })
             self.loss.append(epoch_loss / self.n_steps)
-            self.acc.append(epoch_acc / self.n_steps)
-            self.energy.append(epoch_energy / self.n_steps)
+            self.acc['mean'].append(np.array(epoch_acc['mean']).mean())
+            self.acc['std'].append(np.array(epoch_acc['std']).std())
             if is_eval:
-                self.acc_eval.append(epoch_acc_eval / self.n_steps)
+                self.acc_eval['mean'].append(np.array(epoch_acc_eval['mean']).mean())
+                self.acc_eval['std'].append(np.array(epoch_acc_eval['std']).std())
+            self.energy.append(epoch_energy / self.n_steps)
 
             # Update learning rate
             self.scheduler.step()
@@ -241,7 +405,10 @@ class PCTrainer(object):
         #         'most_recent_model.pth'
         #     )
         # )
-
+        self.acc_time['acc']['mean'] /= self.options['collect_acc_last']
+        self.acc_time['acc']['std'] = self.acc_time['acc']['std'].std(0)
+        self.acc_time_eval['acc']['mean'] /= self.options['collect_acc_last']
+        self.acc_time_eval['acc']['std'] = self.acc_time_eval['acc']['std'].std(0)
         tbar.close()
         # if self.options.is_wandb:
         #     wandb.finish()
