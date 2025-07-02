@@ -1,6 +1,7 @@
-n_epochs: 60
+n_epochs: 100
 n_steps: 1
-batch_size: 128
+batch_size: 64
+aggregation_points: 4
 sequence_length: 100
 obs_size: 6
 latent_size: 512
@@ -15,12 +16,14 @@ test_inf_iters: 5
 inf_lr: 0.001
 
 sweep: true
-save_every: 10
+save_every: 2
 evaluation: true
-eval_every: 5
+eval_every: 2
+collect_acc_last: 2
 
 validate_with_ini_pos: None
-mode: pomdp
+model: tpcn
+mode: mdp
 device: cpu
 data_path: data
-use_preloaded: true
+use_preloaded: false
