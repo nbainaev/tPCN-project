@@ -2,14 +2,19 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+import random
 import os
 import time
 import json
+import shutil
 import matplotlib as mpl
 import torch.optim as optim
 import torch.nn.functional as F
+from datetime import datetime
 from ruamel.yaml import YAML
 from pathlib import Path
+from scipy.interpolate import make_smoothing_spline
 
 class Softmax(nn.Module):
     def forward(self, inp):
@@ -62,6 +67,36 @@ class Linear(nn.Module):
 
     def deriv(self, inp):
         return torch.ones((1,)).to(inp.device)
+
+class UniqueColorPicker:
+    def __init__(self, palette_name="husl"):
+        """
+        Инициализация выбора цветов из палитры seaborn.
+        
+        :param palette_name: Имя палитры (по умолчанию "husl" — хорошая палитра для различимости)
+        """
+        self.palette_name = palette_name
+        self.available_colors = sns.color_palette(palette_name)
+        self.used_colors = set()
+        
+    def get_unique_color(self):
+        """
+        Возвращает случайный не повторяющийся цвет из палитры.
+        Если все цвета использованы, сбрасывает счётчик и начинает заново.
+        """
+        if not self.available_colors:
+            # Если цвета закончились, сбрасываем и начинаем заново
+            self.available_colors = sns.color_palette(self.palette_name)
+            self.used_colors = set()
+        
+        # Выбираем случайный цвет из оставшихся
+        color = random.choice(self.available_colors)
+        
+        # Удаляем его из доступных и добавляем в использованные
+        self.available_colors.remove(color)
+        self.used_colors.add(tuple(color))  # Конвертируем в tuple, т.к. список нехешируемый
+        
+        return color
 
 def cov(x, rowvar=False, bias=False, ddof=None, aweights=None):
     """Estimates covariance matrix like numpy.cov"""
@@ -169,11 +204,81 @@ def read_config(filepath):
         yaml = YAML()
         return yaml.load(config_io)
 
-def plot_training_metrics(episodes, accuracy, total_loss, energy, accuracy_eval=None, config=None, new_fig=True, fig=None, axs=None,
-                         figsize=(10, 8), style='seaborn-v0_8', label='', show=True,
-                         colors=None, linewidth=2.5, title_name='', fig_name=None,
-                         grid_alpha=0.3, title_fontsize=12,
-                         save_path=None):
+def save_yaml(data, path):
+    """
+    Сохраняет данные в YAML-файл по относительному пути.
+    Требует, чтобы целевая папка уже существовала.
+    
+    Параметры:
+        data (dict): Данные для сохранения
+        path (str): Относительный путь (с расширением или без)
+                   Пример: "configs/exp1" → сохранит в "configs/exp1.yaml"
+    """
+    yaml = YAML()
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.preserve_quotes = True
+    yaml.allow_unicode = True
+
+
+    if not path.endswith(('.yaml', '.yml')):
+        path += '.yaml'
+
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        yaml.dump(data, f)
+
+    print(f"Файл сохранён: {path}")
+import random
+
+def random_pair_generator(room, size):
+    """
+    Генератор бесконечных случайных пар чисел (кортежей)
+    
+    Параметры:
+        min_val (int): Минимальное значение (включительно)
+        max_val (int): Максимальное значение (включительно)
+        
+    Возвращает:
+        tuple: Кортеж вида (x, y) где x и y ∈ [min_val, max_val]
+    """
+    room = np.array(room[0])
+    max_y = room.shape[0] - 1
+    max_x = room.shape[1] - 1
+    points = []
+    for i in range(size):
+        while True:
+            point = [random.randint(0, max_x), random.randint(0, max_y)]
+            if room[point[0], point[1]] >= 0:
+                break
+        points.append(point)
+    return np.array(points).squeeze()
+
+def create_folder_with_datetime(base_name):
+    """
+    Создает папку с именем `base_name_YYYY-MM-DD_HH-MM`.
+    Если папка уже существует - удаляет её и создает новую.
+    Возвращает путь к созданной папке.
+    """
+    # Формат даты без секунд
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    folder_name = f"{base_name}_{current_time}"
+    
+    # Удаляем папку, если она существует
+    if os.path.exists(folder_name):
+        shutil.rmtree(folder_name)
+    
+    # Создаем новую папку
+    os.makedirs(folder_name, exist_ok=True)
+    print(f"Папка создана: {folder_name}")
+    return folder_name
+
+def plot_training_metrics(episodes, accuracy, total_loss=None, energy=None, accuracy_eval=None,
+                          accuracy_time=None, accuracy_time_eval=None,
+                          config=None, new_fig=True, fig=None, axs=None,
+                          figsize=(10, 8), style='seaborn-v0_8', label='', show=True,
+                          colors=None, linewidth=2.5, title_name='', fig_name=None,
+                          grid_alpha=0.3, title_fontsize=12,
+                          save_path=None):
     """
     Улучшенная визуализация метрик обучения с настройкой стилей
     
@@ -191,51 +296,56 @@ def plot_training_metrics(episodes, accuracy, total_loss, energy, accuracy_eval=
     ['#2ca02c', '#d62728', '#ff7f0e', '#1f77b4']
     if colors is None:
         colors = ['#1f77b4'] * 4
-    
     # Устанавливаем стиль
     plt.style.use(style)
     mpl.rcParams['font.family'] = 'DejaVu Sans'  # Шрифт с поддержкой кириллицы
-    
-    # Создаем фигуру с 4 субплогами
+    metrics = [accuracy, accuracy_eval, accuracy_time['acc'], accuracy_time_eval['acc']]
+    labels = ['Training Accuracy', 'Accuracy Eval', 'Accuracy Time', 'Accuracy Time Eval']
+    n_subplots = 0
+    for i, metric in enumerate(metrics):
+        if metric is None:
+            metrics.pop(i)
+            labels.pop(i)
+        else:
+            n_subplots += 1
     if new_fig:
-        fig, axs = plt.subplots(2, 2, figsize=figsize, 
+        fig, axs = plt.subplots(n_subplots // 2, 2, figsize=figsize, 
                             facecolor='#f5f5f5' if style != 'dark_background' else '#2b2b2b',
                             constrained_layout=True)
     
         fig.suptitle(f'Training Metrics Analysis {title_name.upper()}', fontsize=14)
     
-
-    axs[0, 0].plot(episodes, accuracy, color=colors[0], linewidth=linewidth, 
-                  label='Accuracy' if not label else label)
-    axs[0, 0].set_title('Model Accuracy', fontsize=title_fontsize)
-    axs[0, 0].set_xlabel('Epochs', fontsize=10)
-    axs[0, 0].set_ylabel('Accuracy', fontsize=10)
-    axs[0, 0].grid(alpha=grid_alpha)
-    axs[0, 0].legend(loc='lower right')
-    axs[0, 1].plot(episodes, total_loss, color=colors[1], linewidth=linewidth, 
-                  label='Obs Loss' if not label else label, linestyle='--')
-    axs[0, 1].set_title('Obs Training Loss', fontsize=title_fontsize)
-    axs[0, 1].set_xlabel('Epochs', fontsize=10)
-    axs[0, 1].set_ylabel('Loss', fontsize=10)
-    axs[0, 1].grid(alpha=grid_alpha)
-    axs[0, 1].legend()
-
-    axs[1, 0].plot(episodes, energy, color=colors[2], linewidth=linewidth,
-                   label='Total loss' if not label else label)
-    axs[1, 0].set_title('Total loss', fontsize=title_fontsize)
-    axs[1, 0].set_xlabel('Epochs', fontsize=10)
-    axs[1, 0].set_ylabel('Loss', fontsize=10)
-    axs[1, 0].grid(alpha=grid_alpha)
-    axs[1, 0].legend()
-    
-    if accuracy_eval is not None:
-        axs[1, 1].plot(episodes[::config['eval_every']], accuracy_eval, color=colors[3], linewidth=linewidth,
-                    label='Accuracy Eval' if not label else label, linestyle='-.')
-        axs[1, 1].set_title('Accuracy Eval', fontsize=title_fontsize)
-        axs[1, 1].set_xlabel('Epochs', fontsize=10)
-        axs[1, 1].set_ylabel('Accuracy', fontsize=10)
-        axs[1, 1].grid(alpha=grid_alpha)
-        axs[1, 1].legend()
+    for i, (metric, Label) in enumerate(zip(metrics, labels)):
+        if 'time' in Label.lower():
+            x = list(range(len(metric['mean'])))
+        elif 'eval' in Label.lower():
+            x = episodes[::config['eval_every']]
+        else:
+            x = episodes
+        if 'loss' not in Label.lower():
+            spline_mean = make_smoothing_spline(x, np.array(metric['mean']), lam=0.3)  # lam регулирует степень сглаживания
+            smoothed_mean = spline_mean(x)
+            spline_std = make_smoothing_spline(x, np.array(metric['std']), lam=0.3)
+            smoothed_std = spline_std(x)
+            axs[i // 2, i % 2].fill_between(x, 
+                                np.maximum(smoothed_mean - smoothed_std, 0), 
+                                np.minimum(smoothed_mean + smoothed_std, 1), 
+                                color=colors[i], 
+                                alpha=0.3,
+                                )
+        else:
+            spline_mean = make_smoothing_spline(x, np.array(metric), lam=0.3)  # lam регулирует степень сглаживания
+            smoothed_mean = spline_mean(x)
+        axs[i // 2, i % 2].plot(x, smoothed_mean, 
+                    linewidth=linewidth, 
+                    color=colors[i],
+                    label=Label if not label else label)
+        axs[i // 2, i % 2].set_title(Label, fontsize=title_fontsize)
+        axs[i // 2, i % 2].set_xlabel('Time step' if 'Time' in Label else 'Epoch', fontsize=10)
+        axs[i // 2, i % 2].set_ylabel('Accuracy' if 'Accuracy' in Label else 'Loss', fontsize=10)
+        axs[i // 2, i % 2].grid(alpha=grid_alpha)
+        axs[i // 2, i % 2].legend(loc='lower right')
+        
     
     # Настройка общего вида
     for ax in axs.flat:
