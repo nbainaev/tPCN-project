@@ -190,62 +190,6 @@ class CHMMGridWorld:
             2D array of shape (batch_size, seq_len_obs) with predicted observations
             where seq_len_obs = seq_len_actions + 1
         """
-        batch_size = act_seqs.shape[0]
-        action_seq_len = act_seqs.shape[1]
-        obs_seq_len = action_seq_len + 1
-        
-        # Initialize output array
-
-        pred_seqs = np.zeros((batch_size, obs_seq_len), dtype=int)
-        pred_seqs[:, 0] = init_pos
-        for i in range(batch_size):
-            # Initialize state distribution
-            current_col = self._get_column_indices(init_pos[i])
-            state_probs = np.zeros(self.n_states)
-            state_probs[current_col] = self.state_prior[current_col]
-            state_probs /= np.sum(state_probs)
-            
-            for j in range(action_seq_len):
-                a = int(act_seqs[i, j])
-                
-                # Compute next state distribution
-                next_state_probs = np.zeros(self.n_states)
-                alpha = self.forward_pass(pred_seqs[i, j], a)
-                for s in range(self.n_states):
-                    if state_probs[s] > 0:
-                        next_state_probs += state_probs[s] @ self.transition_probs[s, a]
-                
-                # Convert to observation probabilities
-                obs_probs = np.zeros(self.n_observations)
-                for obs_idx in range(self.n_observations):
-                    col = self._get_column_indices(obs_idx)
-                    obs_probs[obs_idx] = np.sum(next_state_probs[col])
-                
-                # Select most probable observation
-                next_obs = np.argmax(obs_probs)
-                obs_decoded = np.array(np.where(self.mdp_mat == next_obs)).reshape(-1)
-                pred_seqs[i, j+1] = obs_decoded 
-                
-                # Update state distribution
-                state_probs = np.zeros(self.n_states)
-                next_col = self._get_column_indices(next_obs)
-                state_probs[next_col] = next_state_probs[next_col]
-                state_probs /= np.sum(state_probs)
-                
-        return pred_seqs
-    
-    def predict_sequence(self, act_seqs: np.ndarray, init_pos: np.ndarray) -> np.ndarray:
-        """
-        Predict sequences of observations given action sequences and initial positions
-        
-        Args:
-            act_seqs: 2D array of shape (batch_size, seq_len_actions)
-            init_pos: 1D array of shape (batch_size,) with initial observation indices
-            
-        Returns:
-            2D array of shape (batch_size, seq_len_obs) with predicted observations
-            where seq_len_obs = seq_len_actions + 1
-        """
         # Transform initial positions to 1D array (batch_size, )
         if self.mode == 'mdp':
             init_pos = self.len_room * init_pos[..., 0] + init_pos[..., 1]
