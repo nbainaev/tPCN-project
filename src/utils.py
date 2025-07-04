@@ -15,6 +15,7 @@ from datetime import datetime
 from ruamel.yaml import YAML
 from pathlib import Path
 from scipy.interpolate import make_smoothing_spline
+from scipy.signal import savgol_filter
 
 class Softmax(nn.Module):
     def forward(self, inp):
@@ -272,6 +273,9 @@ def create_folder_with_datetime(base_name):
     print(f"Папка создана: {folder_name}")
     return folder_name
 
+def moving_average(y, window_size=2):
+    return np.convolve(y, np.ones(window_size)/window_size, mode='same')
+
 def plot_training_metrics(episodes, accuracy, total_loss=None, energy=None, accuracy_eval=None,
                           accuracy_time=None, accuracy_time_eval=None,
                           config=None, new_fig=True, fig=None, axs=None,
@@ -324,9 +328,12 @@ def plot_training_metrics(episodes, accuracy, total_loss=None, energy=None, accu
             x = episodes
         if 'loss' not in Label.lower():
             spline_mean = make_smoothing_spline(x, np.array(metric['mean']), lam=0.3)  # lam регулирует степень сглаживания
-            smoothed_mean = spline_mean(x)
+            smoothed_mean = np.array(spline_mean(x))
+            smoothed_mean = savgol_filter(smoothed_mean, window_length=5, polyorder=3)
+
             spline_std = make_smoothing_spline(x, np.array(metric['std']), lam=0.3)
-            smoothed_std = spline_std(x)
+            smoothed_std = np.array(spline_std(x))
+            smoothed_std = savgol_filter(smoothed_std, window_length=5, polyorder=3)
             axs[i // 2, i % 2].fill_between(x, 
                                 np.maximum(smoothed_mean - smoothed_std, 0), 
                                 np.minimum(smoothed_mean + smoothed_std, 1), 
@@ -335,7 +342,8 @@ def plot_training_metrics(episodes, accuracy, total_loss=None, energy=None, accu
                                 )
         else:
             spline_mean = make_smoothing_spline(x, np.array(metric), lam=0.3)  # lam регулирует степень сглаживания
-            smoothed_mean = spline_mean(x)
+            smoothed_mean = np.array(spline_mean(x))
+            smoothed_mean = savgol_filter(smoothed_mean, window_length=5, polyorder=3)
         axs[i // 2, i % 2].plot(x, smoothed_mean, 
                     linewidth=linewidth, 
                     color=colors[i],
