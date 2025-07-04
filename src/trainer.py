@@ -56,27 +56,27 @@ class BaselineTrainer(object):
             for item in tbar:
                 if self.options['use_preloaded']:
                     inputs, pc_outputs, init_actv = item
-                    inputs = inputs.numpy().squeeze()
-                    pc_outputs = pc_outputs.numpy()
-                    init_actv = init_actv.numpy().squeeze()
+                    inputs = inputs.numpy().squeeze().astype(int)
+                    pc_outputs = pc_outputs.numpy().astype(int)
+                    init_actv = init_actv.numpy().squeeze().astype(int)
                 else:
                     ini_pos = self.options['train_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['train_with_ini_pos'] else ini_pos
                     inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos, encode=False, save=False)
-                    pc_outputs =  pc_outputs.numpy()
-                    inputs = inputs.numpy().squeeze()
-                    init_actv = init_actv.numpy().squeeze()
+                    pc_outputs =  pc_outputs.numpy().astype(int)
+                    inputs = inputs.numpy().squeeze().astype(int)
+                    init_actv = init_actv.numpy().squeeze().astype(int)
                 if self.options['mode'] == 'pomdp':
                     pc_outputs = pc_outputs.squeeze(3)
                 if self.options['model'] == 'chmm':
                     if self.options['mode'] == 'pomdp':
-                        obs_list = np.concatenate((init_actv[:, np.newaxis], pc_outputs.squeeze(2)), axis=1).astype(int)
+                        obs_list = np.concatenate((init_actv[:, np.newaxis], pc_outputs.squeeze(2)), axis=1)
                     else:
-                        obs_list = np.concatenate((init_actv[:, np.newaxis, :], pc_outputs), axis=1).astype(int)
+                        obs_list = np.concatenate((init_actv[:, np.newaxis, :], pc_outputs), axis=1)
                     self.model.observe_sequence(obs_list, inputs)
-                    pred_pos = np.array(self.model.predict_sequence(inputs.astype(int), init_actv.astype(int)))[:, 1:, :]
+                    pred_pos = np.array(self.model.predict_sequence(inputs, pc_outputs.squeeze(), init_actv))[:, 1:, :]
                 else:
                     self.model.observe_sequence(pc_outputs, inputs, init_actv)
-                    pred_pos = self.model.predict_sequence(inputs, init_actv)
+                    pred_pos = self.model.predict_sequence(inputs, pc_outputs, init_actv)
 
                 acc = np.all(pc_outputs == pred_pos, axis=2)
                 if epoch_idx + self.options['collect_acc_last'] >= self.n_epochs:
@@ -100,21 +100,16 @@ class BaselineTrainer(object):
                 if is_eval:
                     ini_pos_eval = self.options['validate_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['validate_with_ini_pos'] else ini_pos
                     inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos_eval, save=False, encode=False)
-                    inputs = inputs[:self.options['batch_size']].numpy().squeeze()
-
+                    inputs = inputs[:self.options['batch_size']].numpy().squeeze().astype(int)
                     if self.options['mode'] == 'pomdp':
-                        pc_outputs = pc_outputs[:self.options['batch_size']].numpy().squeeze(3)
+                        pc_outputs = pc_outputs[:self.options['batch_size']].numpy().squeeze(3).astype(int)
                     else:
-                        pc_outputs = pc_outputs[:self.options['batch_size']].numpy()
-                    init_actv = init_actv[:self.options['batch_size']].numpy().squeeze()
+                        pc_outputs = pc_outputs[:self.options['batch_size']].numpy().astype(int)
+                    init_actv = init_actv[:self.options['batch_size']].numpy().squeeze().astype(int)
                     if self.options['model'] == 'chmm':
-                        if self.options['mode'] == 'pomdp':
-                            obs_list = np.concatenate((init_actv[:, np.newaxis], pc_outputs.squeeze(2)), axis=1).astype(int)
-                        else:
-                            obs_list = np.concatenate((init_actv[:, np.newaxis, :], pc_outputs), axis=1).astype(int)
-                        pred_pos = np.array(self.model.predict_sequence(inputs.astype(int), init_actv.astype(int)))[:, 1:, :]
+                        pred_pos = np.array(self.model.predict_sequence(inputs, pc_outputs.squeeze(), init_actv))[:, 1:, :]
                     else:
-                        pred_pos = self.model.predict_sequence(inputs, init_actv)
+                        pred_pos = self.model.predict_sequence(inputs, pc_outputs, init_actv)
                     #pc_outputs_decoded = self.traj_gen.decode_trajectory(pc_outputs)
                     # pred_pos = self.traj_gen.decode_trajectory(pred_xs)
                     acc_eval = np.all(pc_outputs == pred_pos, axis=2)
@@ -273,8 +268,6 @@ class PCTrainer(object):
 
             dataloader = get_traj_loader(path, self.options)
 
-        # if self.options.is_wandb == True and self.options.sweep == False:
-        #     wandb.init(project='place-cell-tpc', config=self.options)
         for epoch_idx in range(self.n_epochs):
             epoch_loss = 0
             epoch_energy = 0
@@ -359,15 +352,6 @@ class PCTrainer(object):
                 desc += f'Acc eval: {np.round(100 * acc_eval.mean(), 2)}' if is_eval else ''
                 tbar.set_description(desc)
 
-            # grad_norm = torch.norm(self.model.Wr.weight.grad, p='fro').item()
-
-            # if self.options.is_wandb:
-            #     wandb.log({
-            #         'loss': epoch_loss / self.n_steps,
-            #         'err': epoch_err / self.n_steps,
-            #         'energy': epoch_energy / self.n_steps,
-            #         'grad_norm': grad_norm,
-            #     })
             self.loss.append(epoch_loss / self.n_steps)
             self.acc['mean'].append(np.array(epoch_acc['mean']).mean())
             self.acc['std'].append(np.array(epoch_acc['std']).std())
@@ -379,39 +363,12 @@ class PCTrainer(object):
             # Update learning rate
             self.scheduler.step()
 
-            # if save and (epoch_idx + 1) % self.options['save_every'] == 0:
-            #     # Save checkpoint
-            #     torch.save(
-            #         {
-            #             'init_model': self.init_model.state_dict(),
-            #             'model': self.model.state_dict(),
-            #         }, 
-            #         os.path.join(
-            #             self.ckpt_dir,
-            #             f'epoch_{epoch_idx + 1}.pth'
-            #         )
-            #     )
-
-        # torch.save(
-        #     {
-        #         'init_model': self.init_model.state_dict(),
-        #         'model': self.model.state_dict(),
-        #         'init_optimizer': self.init_optimizer.state_dict(),
-        #         'optimizer': self.optimizer.state_dict(),
-        #         'scheduler': self.scheduler.state_dict(),
-        #     }, 
-        #     os.path.join(
-        #         self.ckpt_dir,
-        #         'most_recent_model.pth'
-        #     )
-        # )
         self.acc_time['acc']['mean'] /= self.options['collect_acc_last']
         self.acc_time['acc']['std'] = self.acc_time['acc']['std'].std(0)
         self.acc_time_eval['acc']['mean'] /= self.options['collect_acc_last']
         self.acc_time_eval['acc']['std'] = self.acc_time_eval['acc']['std'].std(0)
         tbar.close()
-        # if self.options.is_wandb:
-        #     wandb.finish()
+
 
     def predict(self, vs, init_actv):
         self.model.eval()
