@@ -130,8 +130,7 @@ class CHMMGridWorld:
         gamma = np.zeros((T, self.cells_per_column))
         xi = np.zeros((T-1, self.n_states, self.n_actions, self.n_states))
         # Compute gamma
-        # gamma = alpha * beta
-        # gamma /= np.sum(gamma, axis=1, keepdims=True)
+
         for t in range(T):
             gamma[t] = alpha[t] * beta[t]
             gamma[t] /= (gamma[t] + self.pseudocount).sum()
@@ -145,9 +144,6 @@ class CHMMGridWorld:
             transition_block = self.transition_probs[:, a, :]
             transition_block = transition_block[np.ix_(prev_col, curr_col)]
 
-            # print(beta[t+1][:, None].T.shape)
-            # print(transition_block.shape)
-            # print(alpha[t][:, None].shape)
             xi_t = alpha[t][:, None] * transition_block * beta[t+1][None, :]
             xi_t /= np.sum(xi_t + self.pseudocount)
             xi[t, :, a, :][np.ix_(prev_col, curr_col)] = xi_t
@@ -161,22 +157,10 @@ class CHMMGridWorld:
         self.state_prior /= np.sum(self.state_prior + self.pseudocount)
         sum_xi = xi.sum(axis=0)
         # Update transition matrix
-        # for t in range(len(xi_list)):
-        #     prev_col = self._get_column_indices(obs_seq[t])
-        #     curr_col = self._get_column_indices(obs_seq[t+1])
-        #     a = int(act_seq[t])
-            
-            # Apply update with learning rate
-            # self.transition_probs[prev_col[:, None], a, curr_col] = \
-            #     (1 - self.lr) * self.transition_probs[prev_col[:, None], a, curr_col] + \
-            #     self.lr * xi_list[t]
         self.transition_probs = self.lr * self.transition_probs + (1 - self.lr) * sum_xi
-        self.transition_probs /= (self.transition_probs + self.pseudocount).sum(axis=2, keepdims=True)
-        # for a in range(self.n_actions):
-        #     self.transition_probs[:, a, :] /= (self.transition_probs[:, a, :] + self.pseudocount).sum(axis=1, keepdims=True)
-        # self.transition_probs /= (self.transition_probs + self.pseudocount).sum()
+        
         # Apply pseudocount and normalize
-        # self.transition_probs /= self.transition_probs.sum(axis=(1, 2), keepdims=True)
+        self.transition_probs /= (self.transition_probs + self.pseudocount).sum(axis=(1, 2), keepdims=True)
         self.log_transition = np.log(self.transition_probs + self.pseudocount)
     
     def observe_sequence(self, obs_seqs: np.ndarray, act_seqs: np.ndarray) -> None:
@@ -200,7 +184,7 @@ class CHMMGridWorld:
             gamma, xi = self.e_step(obs_seq, act_seq)
             self.m_step(obs_seq, act_seq, gamma, xi)
     
-    def predict_sequence(self, act_seqs: np.ndarray, init_pos: np.ndarray) -> np.ndarray:
+    def predict_sequence(self, act_seqs: np.ndarray, obs_seqs, init_pos: np.ndarray) -> np.ndarray:
         """
         Predict sequences of observations given action sequences and initial positions
         
@@ -215,6 +199,9 @@ class CHMMGridWorld:
         # Transform initial positions to 1D array (batch_size, )
         if self.mode == 'mdp':
             init_pos = self.len_room * init_pos[..., 0] + init_pos[..., 1]
+            obs_seqs = self.len_room * obs_seqs[..., 0] + obs_seqs[..., 1]
+        
+        obs_seqs = np.concatenate((init_pos[:, None], obs_seqs), axis=1)
         batch_size = act_seqs.shape[0]
         action_seq_len = act_seqs.shape[1]
         obs_seq_len = action_seq_len + 1
@@ -225,14 +212,14 @@ class CHMMGridWorld:
 
         for i in range(batch_size):
             for j in range(action_seq_len):
-                current_col = self._get_column_indices(pred_seqs[i, j])
+                current_col = self._get_column_indices(obs_seqs[i, j])
                 a = int(act_seqs[i, j])
                 if j == 0: # initial position
                     state_probs = np.zeros((self.n_states, ))
                     state_probs[current_col] = self.state_prior[current_col]
                     next_state_probs = (state_probs[None, :] @ self.transition_probs[:, a, :]).squeeze()
                 else:
-                    alpha = self.forward_pass(pred_seqs[i, :j], act_seqs[i, :j])
+                    alpha = self.forward_pass(obs_seqs[i, :j], act_seqs[i, :j])
                     state_probs = np.zeros((self.n_states, ))
                     state_probs[current_col] = alpha[-1]
                     state_probs /= np.sum(state_probs + self.pseudocount)
