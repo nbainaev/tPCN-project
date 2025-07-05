@@ -214,16 +214,11 @@ class CHMMGridWorld:
             for j in range(action_seq_len):
                 current_col = self._get_column_indices(obs_seqs[i, j])
                 a = int(act_seqs[i, j])
-                if j == 0: # initial position
-                    state_probs = np.zeros((self.n_states, ))
-                    state_probs[current_col] = self.state_prior[current_col]
-                    next_state_probs = (state_probs[None, :] @ self.transition_probs[:, a, :]).squeeze()
-                else:
-                    alpha = self.forward_pass(obs_seqs[i, :j], act_seqs[i, :j])
-                    state_probs = np.zeros((self.n_states, ))
-                    state_probs[current_col] = alpha[-1]
-                    state_probs /= np.sum(state_probs + self.pseudocount)
-                    next_state_probs = (state_probs[None, :] @ self.transition_probs[:, a, :]).squeeze()
+                alpha = self.forward_pass(obs_seqs[i, :j+1], act_seqs[i, :j])
+                state_probs = np.zeros((self.n_states, ))
+                state_probs[current_col] = alpha[-1]
+                state_probs /= np.sum(state_probs + self.pseudocount)
+                next_state_probs = (state_probs[None, :] @ self.transition_probs[:, a, :]).squeeze()
                 
                 # Convert to observation probabilities
                 obs_probs = np.zeros(self.n_observations)
