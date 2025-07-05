@@ -23,7 +23,7 @@ class CHMMGridWorld:
             alpha: float = 1.0,
             pseudocount: float = 1e-12,
             seed: Optional[int] = None,
-            mode = 'pomdp'
+            mode: str = 'pomdp'
     ):
         self.mode = mode
         if self.mode == 'mdp':
@@ -106,7 +106,7 @@ class CHMMGridWorld:
         T = len(obs_seq)
         beta = np.zeros((T, self.cells_per_column))
         beta[-1] = 1
-        beta[-1] /= beta[-1].sum()
+        beta[-1] /= np.sum(beta[-1] + self.pseudocount)
         # Backward recursion
         for t in range(T-2, -1, -1):
             curr_col = self._get_column_indices(obs_seq[t])
@@ -158,6 +158,8 @@ class CHMMGridWorld:
         sum_xi = xi.sum(axis=0)
         # Update transition matrix
         self.transition_probs = self.lr * self.transition_probs + (1 - self.lr) * sum_xi
+        # for a in range(self.n_actions):
+        #     self.transition_probs[:, a, :] /= (self.transition_probs[:, a, :] + self.pseudocount).sum(axis=1, keepdims=True)
         
         # Apply pseudocount and normalize
         self.transition_probs /= (self.transition_probs + self.pseudocount).sum(axis=(1, 2), keepdims=True)
@@ -184,7 +186,11 @@ class CHMMGridWorld:
             gamma, xi = self.e_step(obs_seq, act_seq)
             self.m_step(obs_seq, act_seq, gamma, xi)
     
-    def predict_sequence(self, act_seqs: np.ndarray, obs_seqs, init_pos: np.ndarray) -> np.ndarray:
+    def predict_sequence(self, 
+                         act_seqs: np.ndarray, 
+                         init_pos: np.ndarray, 
+                         obs_seqs: Optional[np.ndarray] = None,
+                         prediction_mode: Optional[str] = 'online') -> np.ndarray:
         """
         Predict sequences of observations given action sequences and initial positions
         
@@ -199,9 +205,13 @@ class CHMMGridWorld:
         # Transform initial positions to 1D array (batch_size, )
         if self.mode == 'mdp':
             init_pos = self.len_room * init_pos[..., 0] + init_pos[..., 1]
-            obs_seqs = self.len_room * obs_seqs[..., 0] + obs_seqs[..., 1]
         
-        obs_seqs = np.concatenate((init_pos[:, None], obs_seqs), axis=1)
+        if prediction_mode == 'online':
+            if obs_seqs is None:
+                raise ValueError("With online prediction mode observation must be passed!")
+            if self.mode == 'mdp':
+                obs_seqs = self.len_room * obs_seqs[..., 0] + obs_seqs[..., 1]
+            obs_seqs = np.concatenate((init_pos[:, None], obs_seqs), axis=1)
         batch_size = act_seqs.shape[0]
         action_seq_len = act_seqs.shape[1]
         obs_seq_len = action_seq_len + 1
@@ -212,9 +222,13 @@ class CHMMGridWorld:
 
         for i in range(batch_size):
             for j in range(action_seq_len):
-                current_col = self._get_column_indices(obs_seqs[i, j])
+                if prediction_mode == 'online':
+                    current_col = self._get_column_indices(obs_seqs[i, j])
+                    alpha = self.forward_pass(obs_seqs[i, :j+1], act_seqs[i, :j])
+                else:
+                    current_col = self._get_column_indices(pred_seqs[i, j])
+                    alpha = self.forward_pass(pred_seqs[i, :j+1], act_seqs[i, :j])
                 a = int(act_seqs[i, j])
-                alpha = self.forward_pass(obs_seqs[i, :j+1], act_seqs[i, :j])
                 state_probs = np.zeros((self.n_states, ))
                 state_probs[current_col] = alpha[-1]
                 state_probs /= np.sum(state_probs + self.pseudocount)
