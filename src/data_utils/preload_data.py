@@ -6,9 +6,10 @@ from typing import Callable, Optional, Any
 from gymnasium.vector import SyncVectorEnv
 from sklearn.preprocessing import OneHotEncoder
 
+
 def make_sync_envs(
     env: Any,
-    conf: dict,
+    confs: list,  # Теперь принимаем список конфигураций вместо одной
     room: Any = None,
     num_envs: int = 4,
     render_mode: Optional[str] = None
@@ -27,26 +28,45 @@ def make_sync_envs(
                         results.append(getattr(env, name)(*args, **kwargs))
                 return results
             return handler
-
-
-    env_fns = [lambda: env(room, **conf) for _ in range(num_envs)]
-    
-
-    envs = WrappedSyncVectorEnv(env_fns)
-    
-
-    if render_mode:
-        for env in envs.envs:
-            env.render_mode = render_mode
+        
+        def reset(self, *, seed=None, options=None, **kwargs):
+            # Полностью переопределяем логику reset
+            if isinstance(seed, int):
+                seed = [seed + i for i in range(self.num_envs)]
+            elif seed is None:
+                seed = [None] * self.num_envs
             
+            if options is not None and not isinstance(options, list):
+                options = [options.copy() for _ in range(self.num_envs)]
+            
+            observations = []
+            infos = {}
+            for i, (env, single_seed) in enumerate(zip(self.envs, seed)):
+                single_options = options[i] if options else None
+                obs, info = env.reset(seed=single_seed, options=single_options)
+                observations.append(obs)
+                infos = self._add_info(infos, info, i)
+            
+            return np.array(observations), infos
+
+    # Создаем env_fns с разными конфигурациями
+    env_fns = [lambda i=i: env(room, **confs[i]) for i in range(num_envs)]
+    
+    envs = WrappedSyncVectorEnv(env_fns)
     return envs
 
+
 class ObservationEncoder:
-    def __init__(self, mode):
+    def __init__(self, mode, collision_hint):
         self.mode = mode
+        self.collision_hint = collision_hint
         if mode == "pomdp":
-            self.obs_encoder = OneHotEncoder(categories=[[-2, -1, 0, 1, 2, 3]], sparse_output=False)
-            self.obs_encoder.fit(np.array([-2, -1, 0, 1, 2, 3]).reshape(-1, 1))
+            if collision_hint:
+                self.obs_encoder = OneHotEncoder(categories=[[-2, -1, 0, 1, 2, 3]], sparse_output=False)
+                self.obs_encoder.fit(np.array([-2, -1, 0, 1, 2, 3]).reshape(-1, 1))
+            else:
+                self.obs_encoder = OneHotEncoder(categories=[[0, 1, 2, 3]], sparse_output=False)
+                self.obs_encoder.fit(np.array([0, 1, 2, 3]).reshape(-1, 1))
         else:
             self.obs_encoder = [OneHotEncoder(categories=[[0, 1, 2, 3, 4]], sparse_output=False), 
                 OneHotEncoder(categories=[[0, 1, 2, 3, 4]], sparse_output=False)]
@@ -85,7 +105,7 @@ class TrajectoryGenerator:
         self.sequence_len = options['sequence_length']
         self.dir_encoder = OneHotEncoder(categories=[[0, 1, 2, 3]], sparse_output=False)
         self.dir_encoder.fit(np.array([0, 1, 2, 3]).reshape(-1, 1))
-        self.obs_encoder = ObservationEncoder(options['mode'])
+        self.obs_encoder = ObservationEncoder(options['mode'], options['conf']['collision_hint'])
         
         self.use_preloaded = options['use_preloaded']
         if options['use_preloaded']:
@@ -94,43 +114,62 @@ class TrajectoryGenerator:
             self.n_samples = self.batch_size
         self.envs = make_sync_envs(
             env=env,
-            conf=options['conf'],
+            confs=[options['conf']] * self.n_samples,
             room=options['room'],
             num_envs=self.n_samples,
         )
         self._rng = np.random.default_rng(seed=42)
     
-    def generate_traj_data(self, ini_pos, save=True, path=None):
+    def generate_traj_data(self, ini_pos, save=True, encode=True, path=None):
         data = {'actions': None, 'obs': None, 'init_obs': None}
 
         if ini_pos is not None:
-            observations, infos = self.envs.reset(options={'start_r': ini_pos[0], 'start_c': ini_pos[1]})
+            if isinstance(ini_pos, np.ndarray) and ini_pos.shape[0] == self.batch_size:
+                option_list = [{'start_r': ini_pos[i, 0], 'start_c': ini_pos[i, 1]} for i in range(ini_pos.shape[0])]
+                observations, infos = self.envs.reset(options=option_list)
+            else:
+                observations, infos = self.envs.reset(options={'start_r': ini_pos[0], 'start_c': ini_pos[1]})
         else:
             observations, infos = self.envs.reset()
-        
-        data['init_obs'] = self.obs_encoder.transform(observations)
-        #seq = observations[:, np.newaxis, :]
-        for step in range(self.sequence_len):
-            
-            action = self._rng.integers(4, size=self.n_samples)
-            action_enc = self.dir_encoder.transform(action.reshape(-1, 1))
-            if data['actions'] is not None:
-                data['actions'] = np.concatenate((data['actions'], action_enc[:, np.newaxis, :]), axis=1)
-            else:
-                data['actions'] = action_enc[:, np.newaxis, :]
-            
-            observations, rewards, terminated, truncated, infos = self.envs.step(action)
-            observations_enc = self.obs_encoder.transform(observations)
-            if data['obs'] is not None:
-                data['obs'] = np.concatenate((data['obs'], observations_enc[:, np.newaxis, :]), axis=1)
-            else:
-                data['obs'] = observations_enc[:, np.newaxis, :]
+        if encode:
+            data['init_obs'] = self.obs_encoder.transform(observations)
+            #seq = observations[:, np.newaxis, :]
+            for step in range(self.sequence_len):
+                
+                action = self._rng.integers(4, size=self.n_samples)
+                action_enc = self.dir_encoder.transform(action.reshape(-1, 1))
+                if data['actions'] is not None:
+                    data['actions'] = np.concatenate((data['actions'], action_enc[:, np.newaxis, :]), axis=1)
+                else:
+                    data['actions'] = action_enc[:, np.newaxis, :]
+                
+                observations, rewards, terminated, truncated, infos = self.envs.step(action)
+                observations_enc = self.obs_encoder.transform(observations)
+                if data['obs'] is not None:
+                    data['obs'] = np.concatenate((data['obs'], observations_enc[:, np.newaxis, :]), axis=1)
+                else:
+                    data['obs'] = observations_enc[:, np.newaxis, :]
             #seq = np.concatenate((seq, observations[:, np.newaxis, :]), axis=1)
             # print(observations, action[0])
             # if data['obs'] is not None:
             #     data['obs'] = np.concatenate((data['obs'], observations.reshape((-1, 1))), axis=1)
             # else:
             #     data['obs'] = observations.reshape((-1, 1))
+        else:
+            data['init_obs'] = observations
+            for step in range(self.sequence_len):
+                
+                action = self._rng.integers(4, size=self.n_samples)
+                if data['actions'] is not None:
+                    data['actions'] = np.concatenate((data['actions'], action[:, np.newaxis]), axis=1)
+                else:
+                    data['actions'] = action[:, np.newaxis]
+                
+                observations, rewards, terminated, truncated, infos = self.envs.step(action)
+                if data['obs'] is not None:
+                    data['obs'] = np.concatenate((data['obs'], observations[:, np.newaxis]), axis=1)
+                else:
+                    data['obs'] = observations[:, np.newaxis]
         
         if self.use_preloaded:
             if save:
