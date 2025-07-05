@@ -229,7 +229,7 @@ def save_yaml(data, path):
         yaml.dump(data, f)
 
     print(f"Файл сохранён: {path}")
-import random
+
 
 def random_pair_generator(room, size):
     """
