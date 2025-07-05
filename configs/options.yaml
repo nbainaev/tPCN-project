@@ -1,8 +1,8 @@
-n_epochs: 100
+n_epochs: 50
 n_steps: 1
 batch_size: 64
 aggregation_points: 4
-sequence_length: 100
+sequence_length: 50
 obs_size: 6
 latent_size: 512
 dir_size: 4
@@ -18,8 +18,17 @@ inf_lr: 0.001
 sweep: true
 save_every: 2
 evaluation: true
-eval_every: 2
+eval_every: 5
 collect_acc_last: 2
+prediction_mode: offline
+
+# for chmm
+chmm_init: {
+  cells_per_column: 1,
+  lr: 0.999,
+  initialization: dirichlet,
+
+}
 
 validate_with_ini_pos: None
 model: tpcn
