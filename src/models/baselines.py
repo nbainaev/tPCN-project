@@ -68,23 +68,35 @@ class FOPModel:
         self.reset()
         return self
     
-    def predict_sequence(self, dirs, obss, init_pos):
+    def predict_sequence(self, dirs, init_pos, obss = None, prediction_mode = 'online'):
         result = []
         self.prev_obs = init_pos.squeeze()
-        obss = obss.astype(int).squeeze()
         dirs = dirs.astype(int)
-        if self.mode == "mdp":
-            obss = np.transpose(obss, axes=(1, 0, 2))
+        if prediction_mode == 'online':
+            if obss is None:
+                raise ValueError("With online prediction mode observation must be passed!")
+            obss = obss.astype(int).squeeze()
+            if self.mode == "mdp":
+                obss = np.transpose(obss, axes=(1, 0, 2))
+            else:
+                obss = obss.T
+            for obs, dir in zip(obss, dirs.T):
+                result += [self.predict(dir)]
+                self.prev_obs = obs
+            self.reset()
+            if self.mode == 'mdp':
+                return np.transpose(np.array(result).squeeze(), axes=(1, 0, 2))
+            else:
+                return np.array(result).T[:, :, np.newaxis]
         else:
-            obss = obss.T
-        for obs, dir in zip(obss, dirs.T):
-            result += [self.predict(dir)]
-            self.prev_obs = obs
-        self.reset()
-        if self.mode == 'mdp':
-            return np.transpose(np.array(result).squeeze(), axes=(1, 0, 2))
-        else:
-            return np.array(result).T[:, :, np.newaxis]
+            for dir in dirs.T:
+                result += [self.predict(dir)]
+                self.prev_obs = result[-1]
+            self.reset()
+            if self.mode == 'mdp':
+                return np.transpose(np.array(result).squeeze(), axes=(1, 0, 2))
+            else:
+                return np.array(result).T[:, :, np.newaxis]
 
 class RandomModel:
     def __init__(self, options):
@@ -101,7 +113,7 @@ class RandomModel:
     def observe_sequence(self, obss, dirs, init_pos):
         pass
     
-    def predict_sequence(self, dirs, obs, init_pos):
+    def predict_sequence(self, dirs, init_pos, obs, prediction_mode):
         if self.mode == 'pomdp':
             return self._rng.integers(self.min, self.max, size=(dirs.shape[0], dirs.shape[1], 2 if self.mode == 'mdp' else 1))
         else:
