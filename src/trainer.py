@@ -73,16 +73,21 @@ class BaselineTrainer(object):
                     else:
                         obs_list = np.concatenate((init_actv[:, np.newaxis, :], pc_outputs), axis=1)
                     self.model.observe_sequence(obs_list, inputs)
-                    pred_pos = np.array(self.model.predict_sequence(inputs, pc_outputs.squeeze(), init_actv))[:, 1:, :]
+                    pred_pos = np.array(self.model.predict_sequence(inputs, 
+                                                                    init_actv, pc_outputs.squeeze(), 
+                                                                    self.options['prediction_mode'])
+                                                                )[:, 1:, :]
                 else:
                     self.model.observe_sequence(pc_outputs, inputs, init_actv)
-                    pred_pos = self.model.predict_sequence(inputs, pc_outputs, init_actv)
+                    pred_pos = self.model.predict_sequence(inputs, init_actv, pc_outputs, self.options['prediction_mode'])
 
                 acc = np.all(pc_outputs == pred_pos, axis=2)
                 if epoch_idx + self.options['collect_acc_last'] >= self.n_epochs:
                     if not len(self.acc_time['acc']['mean']):
                         self.acc_time['acc']['mean'] = acc.mean(0)
-                        acc_time_batch = np.array([arr.mean(0) for arr in np.array_split(acc, self.options['aggregation_points'])])
+                        acc_time_batch = np.array(
+                            [arr.mean(0) for arr in np.array_split(acc, self.options['aggregation_points'])]
+                        )
                         self.acc_time['acc']['std'] = acc_time_batch
                     else:
                         self.acc_time['acc']['mean'] += acc.mean(0)
@@ -107,9 +112,12 @@ class BaselineTrainer(object):
                         pc_outputs = pc_outputs[:self.options['batch_size']].numpy().astype(int)
                     init_actv = init_actv[:self.options['batch_size']].numpy().squeeze().astype(int)
                     if self.options['model'] == 'chmm':
-                        pred_pos = np.array(self.model.predict_sequence(inputs, pc_outputs.squeeze(), init_actv))[:, 1:, :]
+                        pred_pos = np.array(self.model.predict_sequence(inputs, 
+                                                init_actv, pc_outputs.squeeze(), 
+                                                self.options['prediction_mode'])
+                                            )[:, 1:, :]
                     else:
-                        pred_pos = self.model.predict_sequence(inputs, pc_outputs, init_actv)
+                        pred_pos = self.model.predict_sequence(inputs, init_actv, pc_outputs, self.options['prediction_mode'])
                     #pc_outputs_decoded = self.traj_gen.decode_trajectory(pc_outputs)
                     # pred_pos = self.traj_gen.decode_trajectory(pred_xs)
                     acc_eval = np.all(pc_outputs == pred_pos, axis=2)
@@ -284,7 +292,10 @@ class PCTrainer(object):
                     ini_pos = self.options['train_with_ini_pos'](self.options['room'], self.options['batch_size']) if self.options['train_with_ini_pos'] else ini_pos
                     inputs, pc_outputs, init_actv = self.traj_gen.generate_traj_data(ini_pos, save=False)
                 energy, loss = self.train_step(inputs, pc_outputs, init_actv)
-                pred_xs, _ = self.predict(inputs, init_actv)
+                if self.options['prediction_mode'] == 'online':
+                    pred_xs, _ = self.predict_online(inputs, pc_outputs, init_actv)
+                else:
+                    pred_xs, _ = self.predict(inputs, init_actv)
 
                 # this softmax intends to find the highest activities among neurons,
                 # whcih is different from a nonlinearity
@@ -323,7 +334,10 @@ class PCTrainer(object):
                     inputs = inputs[:self.options['batch_size']]
                     pc_outputs = pc_outputs[:self.options['batch_size']]
                     init_actv = init_actv[:self.options['batch_size']]
-                    pred_xs, _ = self.predict(inputs, init_actv)
+                    if self.options['prediction_mode'] == 'online':
+                        pred_xs, _ = self.predict_online(inputs, pc_outputs, init_actv)
+                    else:
+                        pred_xs, _ = self.predict(inputs, init_actv)
                     
                     if not isinstance(self.model.out_activation, src.utils.Softmax):
                         pred_xs = F.softmax(pred_xs, dim=-1)
@@ -380,6 +394,26 @@ class PCTrainer(object):
             for k in range(self.options['sequence_length']):
                 v = vs[:, k].to(self.options['device'])
                 prev_hidden = self.model.g(v, prev_hidden)
+                pred_zs.append(prev_hidden)
+
+            pred_zs = torch.stack(pred_zs, dim=1) # [batch_size, sequence_length, Ng]
+            pred_xs = self.model.decode(pred_zs)
+            
+        return pred_xs, pred_zs
+    
+    def predict_online(self, vs, pc_outputs, init_actv):
+        self.model.eval()
+        self.init_model.eval()
+        pred_zs = []
+        with torch.no_grad():
+            self.init_model.inference(self.test_inf_iters, self.inf_lr, init_actv.to(self.options['device']))
+            prev_hidden = self.init_model.z.clone().detach()
+            for k in range(self.options['sequence_length']):
+                p = pc_outputs[:, k].to(self.options['device'])
+                v = vs[:, k].to(self.options['device'])
+                self.model.inference(self.inf_iters, self.inf_lr, v, prev_hidden, p)
+                # update the hidden state
+                prev_hidden = self.model.z.clone().detach()
                 pred_zs.append(prev_hidden)
 
             pred_zs = torch.stack(pred_zs, dim=1) # [batch_size, sequence_length, Ng]
