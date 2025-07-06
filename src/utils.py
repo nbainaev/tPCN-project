@@ -70,14 +70,15 @@ class Linear(nn.Module):
         return torch.ones((1,)).to(inp.device)
 
 class UniqueColorPicker:
-    def __init__(self, palette_name="husl"):
+    def __init__(self, palette_name="husl", colors=None):
         """
         Инициализация выбора цветов из палитры seaborn.
         
         :param palette_name: Имя палитры (по умолчанию "husl" — хорошая палитра для различимости)
         """
         self.palette_name = palette_name
-        self.available_colors = sns.color_palette(palette_name)
+        self.available_colors = colors if colors is not None else sns.color_palette(palette_name)
+        self.colors = colors
         self.used_colors = set()
         
     def get_unique_color(self):
@@ -87,11 +88,11 @@ class UniqueColorPicker:
         """
         if not self.available_colors:
             # Если цвета закончились, сбрасываем и начинаем заново
-            self.available_colors = sns.color_palette(self.palette_name)
+            self.available_colors = self.colors if self.colors is not None else sns.color_palette(self.palette_name)
             self.used_colors = set()
         
         # Выбираем случайный цвет из оставшихся
-        color = random.choice(self.available_colors)
+        color = self.available_colors[0]
         
         # Удаляем его из доступных и добавляем в использованные
         self.available_colors.remove(color)
@@ -242,7 +243,8 @@ def random_pair_generator(room, size):
     Возвращает:
         tuple: Кортеж вида (x, y) где x и y ∈ [min_val, max_val]
     """
-    room = np.array(room[0])
+    room = np.array(room)
+    room = -(room[0] < 0).astype(int) - np.array(room[2]) 
     max_y = room.shape[0] - 1
     max_x = room.shape[1] - 1
     points = []
@@ -327,11 +329,11 @@ def plot_training_metrics(episodes, accuracy, total_loss=None, energy=None, accu
         else:
             x = episodes
         if 'loss' not in Label.lower():
-            spline_mean = make_smoothing_spline(x, np.array(metric['mean']), lam=0.3)  # lam регулирует степень сглаживания
+            spline_mean = make_smoothing_spline(x, np.array(metric['mean']))  # lam регулирует степень сглаживания
             smoothed_mean = np.array(spline_mean(x))
             smoothed_mean = savgol_filter(smoothed_mean, window_length=5, polyorder=3)
 
-            spline_std = make_smoothing_spline(x, np.array(metric['std']), lam=0.3)
+            spline_std = make_smoothing_spline(x, np.array(metric['std']))
             smoothed_std = np.array(spline_std(x))
             smoothed_std = savgol_filter(smoothed_std, window_length=5, polyorder=3)
             axs[i // 2, i % 2].fill_between(x, 
