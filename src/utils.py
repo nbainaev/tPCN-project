@@ -245,16 +245,8 @@ def random_pair_generator(room, size):
     """
     room = np.array(room)
     room = -(room[0] < 0).astype(int) - np.array(room[2]) 
-    max_y = room.shape[0] - 1
-    max_x = room.shape[1] - 1
-    points = []
-    for i in range(size):
-        while True:
-            point = [random.randint(0, max_x), random.randint(0, max_y)]
-            if room[point[0], point[1]] >= 0:
-                break
-        points.append(point)
-    return np.array(points).squeeze()
+    available_inds = np.argwhere(room == 0)
+    return np.array(random.choices(available_inds, k=size)).squeeze()
 
 def create_folder_with_datetime(base_name):
     """
