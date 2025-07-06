@@ -141,7 +141,6 @@ class TrajectoryGenerator:
                 
                 observations, rewards, terminated, truncated, infos = self.envs.step(action)
                 active_episodes &= ~terminated
-                
                 observations_enc = self.obs_encoder.transform(observations)
                 observations_enc[~active_episodes, :] = np.nan
                 action_enc[~active_episodes, :] = np.nan
@@ -153,12 +152,6 @@ class TrajectoryGenerator:
                     data['obs'] = np.concatenate((data['obs'], observations_enc[:, np.newaxis, :]), axis=1)
                 else:
                     data['obs'] = observations_enc[:, np.newaxis, :]
-            #seq = np.concatenate((seq, observations[:, np.newaxis, :]), axis=1)
-            # print(observations, action[0])
-            # if data['obs'] is not None:
-            #     data['obs'] = np.concatenate((data['obs'], observations.reshape((-1, 1))), axis=1)
-            # else:
-            #     data['obs'] = observations.reshape((-1, 1))
         else:
             data['init_obs'] = observations
             for step in range(self.sequence_len):
@@ -167,8 +160,6 @@ class TrajectoryGenerator:
                 
                 observations, rewards, terminated, truncated, infos = self.envs.step(action)
                 active_episodes &= ~terminated
-                action = action.astype(float)
-                observations = observations.astype(float)
                 action[~active_episodes] = np.nan
                 observations[~active_episodes] = np.nan
                 if data['actions'] is not None:
@@ -204,3 +195,45 @@ class TrajectoryGenerator:
                    torch.tensor(data['init_obs'], dtype=torch.float32)
             return torch.tensor(data['actions'], dtype=torch.float32), torch.tensor(data['obs'], dtype=torch.float32),\
                    torch.tensor(data['init_obs'], dtype=torch.float32)
+    
+    def decode_trajectory(self, data):
+        if isinstance(data, torch.Tensor):
+            data = data.numpy()
+        data_dec = None
+        for seq in data:
+            if data_dec is None:
+                data_dec = self.obs_encoder.inverse_transform(seq)[np.newaxis, :, :]
+            else:
+                data_dec = np.concatenate((data_dec, self.obs_encoder.inverse_transform(seq)[np.newaxis, :, :]), axis=0)
+        return data_dec
+
+
+class Trajectory(torch.utils.data.Dataset):
+    def __init__(self, path):
+        self.data = {}
+        self.v = np.load(path + "\\directions.npy")
+        self.obs = np.load(path + "\\observations.npy")
+        self.init_obs = np.load(path + "\\init_pos.npy")
+    
+    def __len__(self):
+
+        return self.obs.shape[0]
+
+    def __getitem__(self, idx):
+        sample_v = torch.tensor(self.v[idx]).to(torch.float32)
+        sample_obs = torch.tensor(self.obs[idx]).to(torch.float32)
+        sample_init_obs = torch.tensor(self.init_obs[idx]).to(torch.float32)
+
+        return sample_v, sample_obs, sample_init_obs
+
+def get_traj_loader(path, options):
+    # Create a Trajectory dataset
+    dataset = Trajectory(path)
+
+    # Create a DataLoader from the Trajectory dataset
+    loader = torch.utils.data.DataLoader(dataset, batch_size=options['batch_size'], shuffle=True)
+
+    return loader
+
+
+    
