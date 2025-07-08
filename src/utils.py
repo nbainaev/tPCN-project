@@ -16,6 +16,10 @@ from ruamel.yaml import YAML
 from pathlib import Path
 from scipy.interpolate import make_smoothing_spline
 from scipy.signal import savgol_filter
+import matplotlib.patches as patches
+from matplotlib.colors import ListedColormap, Normalize
+import matplotlib.cm as cm
+import imageio
 
 class Softmax(nn.Module):
     def forward(self, inp):
@@ -269,6 +273,224 @@ def create_folder_with_datetime(base_name):
 
 def moving_average(y, window_size=2):
     return np.convolve(y, np.ones(window_size)/window_size, mode='same')
+
+def find_nearest_position(field, current_pos, target_value):
+    """
+    Находит ближайшую позицию с заданным значением относительно текущей позиции.
+    Игнорирует отрицательные значения (стенки).
+    """
+
+    # Получаем все позиции с target_value (исключая стенки)
+    positions = np.argwhere((field == target_value) & (field != -1))
+    if len(positions) == 0:
+        return current_pos  # если такого значения нет, остаемся на месте
+    
+    # Вычисляем расстояния до текущей позиции
+    distances = np.sum((positions - np.array(current_pos))**2, axis=1)
+    
+    # Находим индекс минимального расстояния
+    nearest_idx = np.argmin(distances)
+    
+    return tuple(positions[nearest_idx])
+
+def save_animation(field, start_pos, observation_sequence, directions, 
+                  gif_path='animation.gif', mp4_path='animation.mp4', fps=2, trace_len=3):
+    """
+    Создает и сохраняет анимацию движения агента в GIF и MP4 форматах.
+    
+    Параметры:
+    - field: 2D массив с значениями клеток
+    - start_pos: начальная позиция агента (строка, столбец)
+    - observation_sequence: последовательность наблюдений
+    - directions: последовательность направлений движения
+    - gif_path: путь для сохранения GIF
+    - mp4_path: путь для сохранения MP4
+    - fps: кадров в секунду
+    """
+    # Проверка и создание директорий
+    # os.makedirs(os.path.dirname(gif_path)) if os.path.dirname(gif_path) else None
+    # os.makedirs(os.path.dirname(mp4_path)) if os.path.dirname(mp4_path) else None
+    
+    # Подготовка данных для анимации
+    unique_values = np.unique(field)
+    pos_values = unique_values[unique_values >= 0]
+    neg_values = unique_values[unique_values < 0]
+    
+    position_history = [start_pos]  # Инициализируем с начальной позиции
+    trail_length = trace_len  # Сколько предыдущих позиций показывать
+    # Цветовая схема
+    colors_pos = cm.Pastel1(np.linspace(0, 1, len(pos_values)+1))[1:]
+    colors_neg = cm.Dark2(np.linspace(0, 1, len(neg_values)+1))[1:]
+    
+    all_colors = []
+    for val in sorted(unique_values):
+        if val >= 0:
+            idx = np.where(pos_values == val)[0][0]
+            all_colors.append(colors_pos[idx])
+        else:
+            idx = np.where(neg_values == val)[0][0]
+            all_colors.append(colors_neg[idx])
+    
+    cmap = ListedColormap(all_colors)
+    norm = Normalize(vmin=min(unique_values), vmax=max(unique_values))
+    
+    direction_arrows = {0: '←', 1: '→', 2: '↑', 3: '↓'}
+    current_pos = start_pos
+    frames = []
+    temp_dir = "temp_frames"
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    fig, ax = plt.subplots(figsize=(10, 10))
+    
+    # Отображаем поле
+    im = ax.imshow(field, cmap=cmap, norm=norm, interpolation='nearest')
+    
+    # Подписи значений в клетках
+    rows, cols = field.shape
+    for y in range(rows):
+        for x in range(cols):
+            val = field[y, x]
+            ax.text(x, y, str(val), ha='center', va='center', 
+                    color='black' if val >= 0 else 'white', fontsize=10)
+    
+    
+    actual_pos = current_pos
+
+    # Актуальная позиция
+    ax.text(actual_pos[1]+0.4, actual_pos[0]+0.4, 'A', ha='right', va='bottom', 
+            color='green', fontsize=14, fontweight='bold')
+    
+    # Актуальная позиция (обводим квадратом)
+    rect_actual = patches.Rectangle((actual_pos[1]-0.3, actual_pos[0]-0.3), 0.6, 0.6, 
+                                    linewidth=2, edgecolor='green', facecolor='none')
+    ax.add_patch(rect_actual)
+    ax.text(actual_pos[1], actual_pos[0], '', ha='center', va='center', 
+            color='green', fontsize=12, fontweight='bold')
+    # Настройки осей
+    ax.set_xticks([])
+    ax.set_yticks([])
+    plt.title(f'Step {0}/{len(observation_sequence)}')
+    plt.tight_layout()
+    # Сохраняем кадр во временную директорию
+    frame_path = os.path.join(temp_dir, f'frame_{0:03d}.png')
+    plt.savefig(frame_path, dpi=80)
+    plt.close()
+    
+    # Добавляем кадр в список
+    frames.append(imageio.imread(frame_path))
+
+    # Создаем каждый кадр анимации
+    for i, (obs, direction) in enumerate(zip(observation_sequence, directions)):
+        fig, ax = plt.subplots(figsize=(10, 10))
+        
+        # Отображаем поле
+        im = ax.imshow(field, cmap=cmap, norm=norm, interpolation='nearest')
+        
+        # Подписи значений в клетках
+        rows, cols = field.shape
+        for y in range(rows):
+            for x in range(cols):
+                val = field[y, x]
+                ax.text(x, y, str(val), ha='center', va='center', 
+                        color='black' if val >= 0 else 'white', fontsize=10)
+        
+        # Находим предсказанную позицию
+        predicted_pos = find_nearest_position(field, current_pos, obs)
+        
+        # Вычисляем актуальную позицию
+        new_pos = list(current_pos)
+        if direction == 0:   # left
+            new_col = current_pos[1] - 1
+            if new_col >= 0 and field[current_pos[0], new_col] >= 0:
+                new_pos[1] = new_col
+        elif direction == 1: # right
+            new_col = current_pos[1] + 1
+            if new_col < field.shape[1] and field[current_pos[0], new_col] >= 0:
+                new_pos[1] = new_col
+        elif direction == 2: # up
+            new_row = current_pos[0] - 1
+            if new_row >= 0 and field[new_row, current_pos[1]] >= 0:
+                new_pos[0] = new_row
+        elif direction == 3: # down
+            new_row = current_pos[0] + 1
+            if new_row < field.shape[0] and field[new_row, current_pos[1]] >= 0:
+                new_pos[0] = new_row
+        
+        actual_pos = tuple(new_pos)
+        direction_text = direction_arrows.get(direction, '?')
+        
+        # Стрелка направления
+        ax.text(current_pos[1]+0.4, current_pos[0]-0.4, direction_text, ha='right', va='top', 
+                color='black', fontsize=12, fontweight='bold')
+        # Предсказанная позиция
+        ax.text(predicted_pos[1]-0.4, predicted_pos[0]+0.4, 'P', ha='left', va='bottom', 
+                color='blue', fontsize=14, fontweight='bold')
+        # Актуальная позиция
+        ax.text(actual_pos[1]+0.4, actual_pos[0]+0.4, 'A', ha='right', va='bottom', 
+                color='green', fontsize=14, fontweight='bold')
+        circle_pred = patches.Circle((predicted_pos[1], predicted_pos[0]), 0.3, 
+                                    linewidth=2, edgecolor='blue', facecolor='none')
+        ax.add_patch(circle_pred)
+        ax.text(predicted_pos[1], predicted_pos[0], '', ha='center', va='center', 
+                color='blue', fontsize=12, fontweight='bold')
+        
+        # Актуальная позиция (обводим квадратом)
+        rect_actual = patches.Rectangle((actual_pos[1]-0.3, actual_pos[0]-0.3), 0.6, 0.6, 
+                                       linewidth=2, edgecolor='green', facecolor='none')
+        ax.add_patch(rect_actual)
+        ax.text(actual_pos[1], actual_pos[0], '', ha='center', va='center', 
+                color='green', fontsize=12, fontweight='bold')
+        
+        # Обновляем историю позиций
+        position_history.append(actual_pos)
+        if len(position_history) > trail_length:
+            position_history.pop(0)
+
+        # Отрисовываем след в виде линии с точками
+        if len(position_history) > 1:
+            # Преобразуем позиции в координаты (x, y)
+            trail_coords = [(p[1], p[0]) for p in position_history]
+            
+            # Рисуем линию следа
+            ax.plot(*zip(*trail_coords), color='blue', linewidth=3, alpha=0.7)
+            
+            # Рисуем точки на позициях
+            for i, (x, y) in enumerate(trail_coords[:-1]):
+                alpha = 0.3 + 0.5 * (i / len(trail_coords))  # Прозрачность увеличивается к текущей позиции
+                ax.plot(x, y, 'o', color='red', markersize=10, alpha=alpha)
+        
+        # Настройки осей
+        ax.set_xticks([])
+        ax.set_yticks([])
+        plt.title(f'Step {i+1}/{len(observation_sequence)}')
+        plt.tight_layout()
+        
+        # Сохраняем кадр во временную директорию
+        frame_path = os.path.join(temp_dir, f'frame_{i+1:03d}.png')
+        plt.savefig(frame_path, dpi=80)
+        plt.close()
+        
+        # Добавляем кадр в список
+        frames.append(imageio.imread(frame_path))
+        
+        current_pos = actual_pos
+    
+    # Сохраняем GIF
+    imageio.mimsave(gif_path, frames, fps=fps)
+    
+    # Сохраняем MP4 (требуется ffmpeg)
+    try:
+        imageio.mimsave(mp4_path, frames, fps=fps, codec='libx264')
+    except:
+        print("Не удалось сохранить MP4. Убедитесь, что установлен ffmpeg.")
+    
+    # Удаляем временные файлы
+    for file in os.listdir(temp_dir):
+        os.remove(os.path.join(temp_dir, file))
+    os.rmdir(temp_dir)
+    
+    print(f"Анимация сохранена как {gif_path} и {mp4_path}")
+
 
 def plot_training_metrics(episodes, accuracy, total_loss=None, energy=None, accuracy_eval=None,
                           accuracy_time=None, accuracy_time_eval=None,
