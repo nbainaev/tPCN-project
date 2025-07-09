@@ -106,7 +106,8 @@ class TrajectoryGenerator:
         self.dir_encoder = OneHotEncoder(categories=[[0, 1, 2, 3]], sparse_output=False)
         self.dir_encoder.fit(np.array([0, 1, 2, 3]).reshape(-1, 1))
         self.obs_encoder = ObservationEncoder(options['mode'], options['conf']['collision_hint'])
-        
+        self.obs_size = options['obs_size']
+        self.dir_size = options['dir_size']
         self.use_preloaded = options['use_preloaded']
         if options['use_preloaded']:
             self.n_samples = self.batch_size * self.n_steps
@@ -140,10 +141,10 @@ class TrajectoryGenerator:
                 action_enc = self.dir_encoder.transform(action.reshape(-1, 1))
                 
                 observations, rewards, terminated, truncated, infos = self.envs.step(action)
-                active_episodes &= ~terminated
                 observations_enc = self.obs_encoder.transform(observations)
                 observations_enc[~active_episodes, :] = np.nan
                 action_enc[~active_episodes, :] = np.nan
+                active_episodes &= ~terminated
                 if data['actions'] is not None:
                     data['actions'] = np.concatenate((data['actions'], action_enc[:, np.newaxis, :]), axis=1)
                 else:
@@ -159,9 +160,9 @@ class TrajectoryGenerator:
                 action = self._rng.integers(4, size=self.n_samples)
                 
                 observations, rewards, terminated, truncated, infos = self.envs.step(action)
-                active_episodes &= ~terminated
                 action[~active_episodes] = np.nan
                 observations[~active_episodes] = np.nan
+                active_episodes &= ~terminated
                 if data['actions'] is not None:
                     data['actions'] = np.concatenate((data['actions'], action[:, np.newaxis]), axis=1)
                 else:
@@ -202,9 +203,19 @@ class TrajectoryGenerator:
         data_dec = None
         for seq in data:
             if data_dec is None:
-                data_dec = self.obs_encoder.inverse_transform(seq)[np.newaxis, :, :]
+                decoded_seq = np.full((seq.shape[0], 1), np.nan)
+                mask = ~np.isnan(seq)
+                seq = seq[mask].reshape(-1, self.obs_size)
+                if len(seq):
+                    decoded_seq[np.unique(np.where(mask)[0])] = self.obs_encoder.inverse_transform(seq)
+                data_dec = decoded_seq[np.newaxis, :, :]
             else:
-                data_dec = np.concatenate((data_dec, self.obs_encoder.inverse_transform(seq)[np.newaxis, :, :]), axis=0)
+                decoded_seq = np.full((seq.shape[0], 1), np.nan)
+                mask = ~np.isnan(seq)
+                seq = seq[mask].reshape(-1, self.obs_size)
+                if len(seq):
+                    decoded_seq[np.unique(np.where(mask)[0])] = self.obs_encoder.inverse_transform(seq)
+                data_dec = np.concatenate((data_dec, decoded_seq[np.newaxis, :, :]), axis=0)
         return data_dec
 
 

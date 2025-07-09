@@ -28,6 +28,7 @@ class BaselineTrainer(object):
         self.loss = None
         self.energy = None
         self.n_epochs = options['n_epochs']
+    
     def train(self, ini_pos=None, save=True):
 
         if self.options['use_preloaded']:
@@ -233,10 +234,18 @@ class PCTrainer(object):
         total_loss += obs_loss.item()
         total_energy += energy.item()
         # get the initial hidden state from the initial static model
+        prev_inds = torch.all(~init_actv.isnan(), dim=1).nonzero().flatten()
         prev_hidden = self.init_model.z.clone().detach()
         for k in range(self.options['sequence_length']):
             p = pc_outputs[:, k].to(self.options['device'])
+            mask = torch.all(~p.isnan(), dim=1)
+            mask = mask[prev_inds]
+            prev_hidden = prev_hidden[mask]
+            prev_inds = torch.all(~p.isnan(), dim=1).nonzero().flatten()
+            p = p[~p.isnan()].reshape(-1, self.options['obs_size'])
             v = vs[:, k].to(self.options['device'])
+            v = v[~v.isnan()].reshape(-1, self.options['dir_size'])
+
             self.optimizer.zero_grad()
             self.model.inference(self.inf_iters, self.inf_lr, v, prev_hidden, p)
             energy, obs_loss = self.model.get_energy()
@@ -304,11 +313,12 @@ class PCTrainer(object):
 
                 pc_outputs_decoded = self.traj_gen.decode_trajectory(pc_outputs)
                 pred_pos = self.traj_gen.decode_trajectory(pred_xs)
-                
+
                 acc = np.all(
                     pc_outputs_decoded == pred_pos, 
                     axis=2
                 )
+
                 if epoch_idx + self.options['collect_acc_last'] >= self.n_epochs:
                     if not len(self.acc_time['acc']['mean']):
                         self.acc_time['acc']['mean'] = acc.mean(0)
@@ -393,6 +403,9 @@ class PCTrainer(object):
             prev_hidden = self.init_model.z.clone().detach()
             for k in range(self.options['sequence_length']):
                 v = vs[:, k].to(self.options['device'])
+                mask = ~v.isnan()[:, 0]
+                v = v[~v.isnan()].reshape(-1, self.options['dir_size'])
+                prev_hidden = prev_hidden[mask]
                 prev_hidden = self.model.g(v, prev_hidden)
                 pred_zs.append(prev_hidden)
 
@@ -405,18 +418,33 @@ class PCTrainer(object):
         self.model.eval()
         self.init_model.eval()
         pred_zs = []
+        
         with torch.no_grad():
             self.init_model.inference(self.test_inf_iters, self.inf_lr, init_actv.to(self.options['device']))
+            prev_inds = torch.all(~init_actv.isnan(), dim=1).nonzero().flatten()
             prev_hidden = self.init_model.z.clone().detach()
             for k in range(self.options['sequence_length']):
                 p = pc_outputs[:, k].to(self.options['device'])
+                mask = torch.all(~p.isnan(), dim=1)
+                mask = mask[prev_inds]
+                prev_hidden = prev_hidden[mask]
+                prev_inds = torch.all(~p.isnan(), dim=1).nonzero().flatten()
+                p = p[~p.isnan()].reshape(-1, self.options['obs_size'])
                 v = vs[:, k].to(self.options['device'])
+                v = v[~v.isnan()].reshape(-1, self.options['dir_size'])
+                
+                pred_hidden = self.model.g(v, prev_hidden)
                 self.model.inference(self.inf_iters, self.inf_lr, v, prev_hidden, p)
+                pred_hidden_padded = torch.zeros([self.options['batch_size'], self.options['latent_size']])
+
+                pred_hidden_padded[prev_inds] = pred_hidden
+                
                 # update the hidden state
                 prev_hidden = self.model.z.clone().detach()
-                pred_zs.append(prev_hidden)
-
+                pred_zs.append(pred_hidden_padded)
+            
             pred_zs = torch.stack(pred_zs, dim=1) # [batch_size, sequence_length, Ng]
             pred_xs = self.model.decode(pred_zs)
             
+            pred_xs[pc_outputs.isnan()] = float('nan')
         return pred_xs, pred_zs

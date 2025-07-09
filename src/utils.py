@@ -381,6 +381,8 @@ def save_animation(field, start_pos, observation_sequence, directions,
 
     # Создаем каждый кадр анимации
     for i, (obs, direction) in enumerate(zip(observation_sequence, directions)):
+        if direction == np.nan or obs == np.nan:
+            break
         fig, ax = plt.subplots(figsize=(10, 10))
         
         # Отображаем поле
