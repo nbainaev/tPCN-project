@@ -9,7 +9,7 @@
 Результаты показали:
 - Для POMDP-моделей не выявлено статистически значимых различий в точности обучения между вариантами инициализации
 - Для MDP-моделей обучение с фиксированными точками демонстрирует повышение accuracy на тренировочной выборке (Δ ≈ 20%), однако на валидационном наборе показатели accuracy остаются сопоставимыми. При этом случайная инициализация обеспечивает более стабильную динамику обучения.
-![Анализ начальной позиции](https://github.com/nbainaev/tPCN-project/reports/report_2/ini_pos.png?raw=true)
+![Анализ начальной позиции](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/ini_pos_1.png)
 ## Влияние collision_hint
 Исследовался эффект от включения/исключения информации о столкновениях:
 - Полная размерность состояния (6 параметров при collision_hint = True)
@@ -18,25 +18,25 @@
 - Модель демонстрирует на 8-10% более точные предсказания при отсутствии подсказок (0.72 vs 0.65), что может быть объяснено:  
     а) Уменьшением эффекта переобучения за счет снижения размерности  
     б) Более эффективной генерализацией скрытых состояний(?)
-![[Pasted image 20250704141617.png|600]]
+![Анализ collision hint](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/collision_hint_1.png)
 ## Сравнение с бейзлайнами
 Тестирование проводилось на 50 и 100 эпохах для фиксированных и случайных траекторий:
 - Для POMDP: tPCN и CHMM существенно превосходят базовые классы (Random Prediction и First Order Prediction), выдавая точность ~95-97% (тестирование проводилось в режиме online)
 - Для MDP: first order prediction и chmm показывают идеальную точность (1.0) вследствие полного выучивания переходов, тогда как random guess сохраняет равномерное распределение (accuracy = 1/n_states).
-![[Pasted image 20250709205257.png|600]]
-![[Pasted image 20250704142042.png|600]]
+![Сравнение с бейзлайнами MDP](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/models_mdp_1.png)
+![Сравнение с бейзлайнами POMDP](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/models_pomdp_1.png)
 
 ## Online vs Offline режим
 Экперименты с online и offline режимами предсказаний проводились на моделях tPCN и CHMM. 
 ### 1. Эксперимент с tPCN
 На рисунке ниже представлены графики метрик для обучения модели tPCN на 50 эпохах, с длиной последовательности 100. Траектории и начальные точки были случайными. Для online режима предсказания, очевидно, модель давала точность предсказания выше, чем для offline. Однако, интересно, что для offline режима точность также стремилась к довольно высокому значению (~0.7-0.8), что на первый взгляд, удивительно, так как модель при предсказании в режиме offline может легко сбиться, а начальное наблюдение не дает исчерпывающей информации о положении на поле. 
 
-![[Pasted image 20250709211010.png|600]]
+![Анализ prediction mode](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/tpcn_prediction_mode_1.png)
 На GIF-анимации ниже представлен пример траектории агента для режима online предсказания.
-![C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\figures\figures_experiments\experiment_2025-07-09_20-39\pomdp_prediction_mode\animation_prediction_mode=online.gif|600](file:///c%3A/Users/nikba/.vscode/Projects/MIPT%20Task%201%20%28tPC%29/figures/figures_experiments/experiment_2025-07-09_20-39/pomdp_prediction_mode/animation_prediction_mode%3Donline.gif)
+![Пример траектории для offline предсказания](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/animation_prediction_mode=online.gif)
 
 На GIF-анимации ниже представлен пример траектории агента для режима offline предсказания.
-![C:\Users\nikba\.vscode\Projects\MIPT Task 1 (tPC)\figures\figures_experiments\experiment_2025-07-09_20-39\pomdp_prediction_mode\animation_prediction_mode=offline.gif|600](file:///c%3A/Users/nikba/.vscode/Projects/MIPT%20Task%201%20%28tPC%29/figures/figures_experiments/experiment_2025-07-09_20-39/pomdp_prediction_mode/animation_prediction_mode%3Doffline.gif)
+![Пример траектории для online предсказания](https://github.com/nbainaev/tPCN-project/blob/master/reports/report_2/animation_prediction_mode=offline.gif)
 # Заключение
 Проведенные эксперименты демонстрируют существенную зависимость эффективности модели tPCN от параметров обучения, причем оптимальная конфигурация различается для POMDP и MDP-режимов. 
 - Параметер сollision_hint приводит к улучшению точности
