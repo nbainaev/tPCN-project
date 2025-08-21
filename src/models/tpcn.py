@@ -177,3 +177,17 @@ class TemporalPCN(nn.Module):
         energy += self.weight_decay * (torch.mean(self.Wr.weight**2))
 
         return energy, obs_loss
+    
+    def generate_successor_features(self, n_steps, prev_z, gamma=0.95):
+        zs = [prev_z]
+        discounts = [1.0]
+        v = (torch.ones([self.Win.weight.shape[1]]) / self.Win.weight.shape[1]).reshape(1, -1)
+        for i in range(n_steps):
+            prev_z = self.g(v, prev_z)
+            zs.append(prev_z)
+            discounts.append(discounts[-1] * gamma)
+        
+        zs = self.decode(torch.vstack(zs))
+        discounts = torch.tensor(discounts).reshape(-1, 1, 1).expand(zs.shape)
+        return (zs * discounts).sum(dim=0)
+    
