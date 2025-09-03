@@ -178,7 +178,6 @@ class PCTrainer(object):
             step_size=options['decay_step_size'], 
             gamma=options['decay_rate'],
         )
-
         self.loss = []
         self.acc = {'mean': [], 'std': []}
         self.energy = []
@@ -223,9 +222,9 @@ class PCTrainer(object):
         self.init_model.train()
         total_loss = 0 # average loss across time steps
         total_energy = 0 # average energy across time steps
-
         # train the initial static pcn to get the initial hidden state
         self.init_optimizer.zero_grad()
+
         self.init_model.inference(self.inf_iters, self.inf_lr, init_actv)
         energy, obs_loss = self.init_model.get_energy()
         energy.backward()
